@@ -20,100 +20,73 @@ def init_db():
     try:
         cur = conn.cursor()
         
-        # 1. جدول المستخدمين (تمت إضافة النقاط والمستوى لنظام التحفيز)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                xp_points INTEGER DEFAULT 0,
-                level INTEGER DEFAULT 1,
+                username TEXT, first_name TEXT,
+                xp_points INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
                 join_date TIMESTAMP DEFAULT NOW()
             );
         """)
         
-        # 2. جدول الأسئلة (تمت إضافة حقل explanation لشرح الجواب مستقبلاً)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS questions (
-                id SERIAL PRIMARY KEY,
-                year INTEGER NOT NULL,
-                semester INTEGER NOT NULL DEFAULT 1,
-                subject TEXT NOT NULL,
-                exam_session TEXT NOT NULL,
-                question_text TEXT NOT NULL,
-                option_a TEXT NOT NULL, option_b TEXT NOT NULL,
-                option_c TEXT NOT NULL, option_d TEXT NOT NULL,
-                correct_option TEXT NOT NULL,
-                explanation TEXT
+                id SERIAL PRIMARY KEY, year INTEGER NOT NULL, semester INTEGER NOT NULL DEFAULT 1,
+                subject TEXT NOT NULL, exam_session TEXT NOT NULL, question_text TEXT NOT NULL,
+                option_a TEXT NOT NULL, option_b TEXT NOT NULL, option_c TEXT NOT NULL, option_d TEXT NOT NULL,
+                correct_option TEXT NOT NULL, explanation TEXT
             );
         """)
         
-        # 3. جدول المكتبة (تمت إضافة حقل doc_type لتصنيف: كتاب، ملخص، دورة)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pdf_files (
-                id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL, 
-                file_id TEXT NOT NULL,
-                year INTEGER, semester INTEGER, subject TEXT,
-                doc_type TEXT DEFAULT 'ملف'
+                id SERIAL PRIMARY KEY, title TEXT NOT NULL, file_id TEXT NOT NULL,
+                year INTEGER, semester INTEGER, subject TEXT, doc_type TEXT DEFAULT 'ملف'
             );
         """)
 
-        # 4. الجداول الأساسية للاختبارات والمحفوظات
         cur.execute("CREATE TABLE IF NOT EXISTS saved_questions (user_id BIGINT, question_id INTEGER, PRIMARY KEY (user_id, question_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS quiz_sessions (user_id BIGINT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMP DEFAULT NOW());")
         
-        # 5. جدول النتائج (سجل الإحصائيات)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS quiz_results (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT, subject TEXT, session_name TEXT,
-                score INTEGER, total INTEGER, percent REAL,
-                quiz_type TEXT DEFAULT 'دورة_كاملة',
+                id SERIAL PRIMARY KEY, user_id BIGINT, subject TEXT, session_name TEXT,
+                score INTEGER, total INTEGER, percent REAL, quiz_type TEXT DEFAULT 'دورة_كاملة',
                 taken_at TIMESTAMP DEFAULT NOW()
             );
         """)
 
-        # ==================== الجداول الجديدة (خطة التطوير) ====================
-        
-        # 6. جدول البطاقات التعليمية (Flashcards)
+        # جدول البطاقات التعليمية المحدث لدعم الفرز حسب السنة والفصل
         cur.execute("""
             CREATE TABLE IF NOT EXISTS flashcards (
                 id SERIAL PRIMARY KEY,
+                year INTEGER DEFAULT 1,
+                semester INTEGER DEFAULT 1,
                 subject TEXT NOT NULL,
                 front_text TEXT NOT NULL,
                 back_text TEXT NOT NULL
             );
         """)
+        cur.execute("ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS year INTEGER DEFAULT 1;")
+        cur.execute("ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS semester INTEGER DEFAULT 1;")
 
-        # 7. جدول خطط الدراسة للطالب
         cur.execute("""
             CREATE TABLE IF NOT EXISTS study_plans (
-                user_id BIGINT PRIMARY KEY,
-                plan_data JSONB NOT NULL,
-                created_at TIMESTAMP DEFAULT NOW()
+                user_id BIGINT PRIMARY KEY, plan_data JSONB NOT NULL, created_at TIMESTAMP DEFAULT NOW()
             );
         """)
 
-        # 8. جدول الإنجازات (Achievements)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS achievements (
-                user_id BIGINT,
-                achievement_name TEXT,
-                earned_at TIMESTAMP DEFAULT NOW(),
+                user_id BIGINT, achievement_name TEXT, earned_at TIMESTAMP DEFAULT NOW(),
                 PRIMARY KEY (user_id, achievement_name)
             );
         """)
 
-        # 9. جدول البلاغات والملاحظات
         cur.execute("""
             CREATE TABLE IF NOT EXISTS reports (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                report_type TEXT,
-                description TEXT,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT NOW()
+                id SERIAL PRIMARY KEY, user_id BIGINT, report_type TEXT, description TEXT,
+                status TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT NOW()
             );
         """)
 
@@ -122,7 +95,6 @@ def init_db():
     finally:
         release_db(conn)
 
-# ==================== دوال إدارة الجلسات ====================
 def save_session_to_db(user_id, data):
     conn = get_db()
     try:
