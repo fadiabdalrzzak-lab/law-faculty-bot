@@ -175,6 +175,7 @@ def register_admin_handlers(bot):
                 bot.send_message(message.chat.id, f"✅ تم إدخال **{inserted}** سؤال!", parse_mode="Markdown", reply_markup=get_admin_main_keyboard())
             except Exception as e:
                 bot.send_message(message.chat.id, f"❌ خطأ: `{e}`\nتأكد من تنسيق الأعمدة.", parse_mode="Markdown")
+        
         elif step == "ADD_PDF_FILE":
             conn = get_db()
             try:
@@ -185,6 +186,39 @@ def register_admin_handlers(bot):
             finally: release_db(conn)
             admin_states.pop(user_id, None)
             bot.send_message(message.chat.id, f"✅ تم إضافة **{message.document.file_name}**!", parse_mode="Markdown", reply_markup=get_admin_main_keyboard())
+            
+        elif step == "FC_FRONT":
+            # خيار رفع البطاقات عبر Excel
+            file_name = message.document.file_name.lower()
+            if not file_name.endswith(('.xlsx', '.xls', '.csv')):
+                return bot.send_message(message.chat.id, "⚠️ يرجى إرسال ملف Excel بصيغة `.xlsx`.")
+            bot.send_message(message.chat.id, "🔄 جاري قراءة ملف البطاقات...")
+            try:
+                file_info = bot.get_file(message.document.file_id)
+                downloaded_file = bot.download_file(file_info.file_path)
+                df = pd.read_excel(io.BytesIO(downloaded_file)) if file_name.endswith(('.xlsx', '.xls')) else pd.read_csv(io.BytesIO(downloaded_file))
+                df.fillna('', inplace=True)
+                
+                if len(df.columns) < 2:
+                    return bot.send_message(message.chat.id, "❌ الملف يجب أن يحتوي على عمودين على الأقل (المصطلح، التعريف).")
+                    
+                conn = get_db()
+                inserted = 0
+                try:
+                    cur = conn.cursor()
+                    for idx, row in df.iterrows():
+                        front = str(row.iloc[0]).strip()
+                        back = str(row.iloc[1]).strip()
+                        if front and back:
+                            cur.execute("INSERT INTO flashcards (year, semester, subject, front_text, back_text) VALUES (%s, %s, %s, %s, %s)", (state["year"], state["semester"], state["subject"], front, back))
+                            inserted += 1
+                    conn.commit()
+                    cur.close()
+                finally: release_db(conn)
+                admin_states.pop(user_id, None)
+                bot.send_message(message.chat.id, f"✅ تم إدخال **{inserted}** بطاقة تعليمية بنجاح!", parse_mode="Markdown", reply_markup=get_admin_main_keyboard())
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ: `{e}`", parse_mode="Markdown")
 
     @bot.message_handler(func=lambda msg: is_admin(msg.from_user.id) and msg.from_user.id in admin_states)
     def handle_admin_states(message):
@@ -201,8 +235,6 @@ def register_admin_handlers(bot):
             markup = types.InlineKeyboardMarkup()
             markup.row(types.InlineKeyboardButton("✅ نعم، أرسل", callback_data="confirm_bcast"), types.InlineKeyboardButton("❌ إلغاء", callback_data="cancel_bcast"))
             bot.send_message(message.chat.id, "⚠️ **تأكيد الإذاعة لجميع الطلاب؟**", parse_mode="Markdown", reply_markup=markup, reply_to_message_id=message.message_id)
-
-        # إضافة سؤال فردي
         elif step == "SELECT_YEAR":
             year_map = {v: k for k, v in YEARS.items()}
             if text in year_map:
@@ -246,8 +278,6 @@ def register_admin_handlers(bot):
             bot.send_message(message.chat.id, f"✅ **تمت الإضافة!** الجواب: ({text})", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
             state["step"] = "ENTER_QUESTION"
             bot.send_message(message.chat.id, "➕ اكتب نص السؤال التالي:")
-
-        # رفع PDF
         elif step == "PDF_SELECT_YEAR":
             year_map = {v: k for k, v in YEARS.items()}
             if text in year_map:
@@ -261,8 +291,6 @@ def register_admin_handlers(bot):
         elif step == "PDF_ENTER_SUBJECT":
             state["subject"], state["step"] = text, "ADD_PDF_FILE"
             bot.send_message(message.chat.id, f"✅ **المادة:** {text}\nأرسل ملف PDF:")
-            
-        # إدارة البطاقات التعليمية (الرفع اليدوي)
         elif step == "FC_SELECT_YEAR":
             year_map = {v: k for k, v in YEARS.items()}
             if text in year_map:
@@ -275,7 +303,7 @@ def register_admin_handlers(bot):
                 bot.send_message(message.chat.id, f"📅 **{text}**\nاكتب اسم المادة للبطاقة:", reply_markup=get_cancel_keyboard())
         elif step == "FC_ENTER_SUBJECT":
             state["subject"], state["step"] = text, "FC_FRONT"
-            bot.send_message(message.chat.id, f"✅ **المادة:** {text}\n\n📝 أرسل الآن **الوجه الأول** للبطاقة (المصطلح أو السؤال):")
+            bot.send_message(message.chat.id, f"✅ **المادة:** {text}\n\n📝 **لإضافة البطاقات لديك خياران:**\n1️⃣ أرسل **ملف Excel** يحتوي على عمودين (المصطلح، التعريف) لرفعها دفعة واحدة.\n2️⃣ أو أرسل **الوجه الأول** للبطاقة الآن لإضافتها يدوياً:", parse_mode="Markdown")
         elif step == "FC_FRONT":
             state["front"], state["step"] = text, "FC_BACK"
             bot.send_message(message.chat.id, "🔄 أرسل الآن **الوجه الثاني** للبطاقة (التعريف أو الجواب):")
@@ -290,8 +318,6 @@ def register_admin_handlers(bot):
             bot.send_message(message.chat.id, "✅ **تم حفظ البطاقة بنجاح!**\n\n📝 أرسل **الوجه الأول** للبطاقة التالية (لنفس المادة):", parse_mode="Markdown")
             state["step"] = "FC_FRONT"
 
-    # ==================== لوحة تعديل السؤال (Inline) والتحكم المتبقي ====================
-    # (الأكواد الخاصة بتعديل الأزرار والإذاعة وحذف الدورات تبقى كما هي وتعمل بشكل مثالي)
     @bot.callback_query_handler(func=lambda call: call.data in ["confirm_bcast", "cancel_bcast"])
     def handle_broadcast_confirmation(call):
         if not is_admin(call.from_user.id): return
