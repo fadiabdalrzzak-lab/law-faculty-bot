@@ -1,12 +1,12 @@
 from telebot import types
 from config import YEARS, SEMESTERS, OPTION_LETTERS
-from database import get_db, release_db, load_session_from_db, save_session_to_db
-from keyboards import get_student_main_keyboard, get_exam_control_keyboard
+from database import get_db, release_db
+from keyboards import get_student_main_keyboard
 from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
+import json
 
 def register_student_handlers(bot):
 
-    # ==================== استجابة القائمة الرئيسية الجديدة ====================
     @bot.message_handler(func=lambda msg: msg.text in [
         "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
         "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
@@ -45,6 +45,24 @@ def register_student_handlers(bot):
             for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"pdfy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "📚 **المكتبة الأكاديمية:**\nاختر السنة:", parse_mode="Markdown", reply_markup=markup)
+
+        elif text == "🧠 البطاقات التعليمية":
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT DISTINCT year FROM flashcards ORDER BY year ASC")
+                years = [r[0] for r in cur.fetchall()]
+                cur.close()
+            finally: release_db(conn)
+
+            if not years:
+                bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة حالياً. ترقبها قريباً!")
+                return
+            
+            markup = types.InlineKeyboardMarkup()
+            for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"fcy_{y}"))
+            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+            bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
 
         elif text == "📈 تقدمي الدراسي":
             markup = types.InlineKeyboardMarkup()
@@ -134,13 +152,13 @@ def register_student_handlers(bot):
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
 
-    # ==================== التنقل في المواد والدورات ====================
     @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
     def handle_delete_msg(call):
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
         safe_answer_callback(bot, call.id)
 
+    # ==================== التنقل في الدورات (التدريب) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
     def handle_year_selection(call):
         year_num = int(call.data.split("_")[1])
@@ -220,11 +238,10 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfs_"))
     def handle_pdf_semester(call):
         _, year_num, sem_num = call.data.split("_")
-        year_num, sem_num = int(year_num), int(sem_num)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
             subjects = cur.fetchall()
             cur.close()
         finally: release_db(conn)
@@ -232,7 +249,7 @@ def register_student_handlers(bot):
         markup = types.InlineKeyboardMarkup()
         for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt})", callback_data=f"pdfb_{year_num}_{sem_num}_{idx}"))
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfy_{year_num}"))
-        bot.edit_message_text(f"📚 **{YEARS[year_num]} - {SEMESTERS[sem_num]}**\nاختر المادة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(f"📚 **{YEARS[int(year_num)]} - {SEMESTERS[int(sem_num)]}**\nاختر المادة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfb_"))
@@ -270,24 +287,117 @@ def register_student_handlers(bot):
             res = cur.fetchone()
             cur.close()
         finally: release_db(conn)
-
         if res:
             bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown")
             safe_answer_callback(bot, call.id, "تم الإرسال!")
         else: safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("delpdf_"))
-    def handle_delete_pdf(call):
-        if not is_admin(call.from_user.id): return
-        parts = call.data.split("_")
-        pdf_id, year_num, sem_num, sub_idx = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+    # ==================== البطاقات التعليمية التفاعلية ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcy_"))
+    def handle_fc_year(call):
+        year_num = int(call.data.split("_")[1])
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("DELETE FROM pdf_files WHERE id=%s", (pdf_id,))
-            conn.commit()
+            cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s ORDER BY semester ASC", (year_num,))
+            semesters = [r[0] for r in cur.fetchall()]
             cur.close()
         finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "✅ تم الحذف!", show_alert=True)
-        call.data = f"pdfb_{year_num}_{sem_num}_{sub_idx}"
-        handle_pdf_subject(call)
+
+        markup = types.InlineKeyboardMarkup()
+        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"fcs_{year_num}_{s}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text(f"🧠 **{YEARS[year_num]}**\nاختر الفصل للبطاقات:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcs_"))
+    def handle_fc_semester(call):
+        _, year_num, sem_num = call.data.split("_")
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject, COUNT(*) FROM flashcards WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
+            subjects = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt} بطاقة)", callback_data=f"fcb_{year_num}_{sem_num}_{idx}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"fcy_{year_num}"))
+        bot.edit_message_text(f"🧠 **اختر المادة للمراجعة السريعة:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcb_"))
+    def handle_fc_start(call):
+        parts = call.data.split("_")
+        year_num, sem_num, sub_idx = map(int, parts[1:4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT subject FROM flashcards WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
+            subjects = [r[0] for r in cur.fetchall()]
+            if sub_idx >= len(subjects): return
+            subject_name = subjects[sub_idx]
+            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
+            cards = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        if not cards: return safe_answer_callback(bot, call.id, "لا توجد بطاقات.", show_alert=True)
+        
+        # حفظ الجلسة في الذاكرة المؤقتة (سنستخدم json لتمرير البيانات في الكول باك لأنها بطاقات خفيفة)
+        send_flashcard(bot, call.message.chat.id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
+        safe_answer_callback(bot, call.id, "🚀 بدأت المراجعة!")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcact_"))
+    def handle_fc_action(call):
+        # fcact_ index _ showback(0/1) _ subject
+        parts = call.data.split("_")
+        idx = int(parts[1])
+        show_back = int(parts[2]) == 1
+        subject_name = "_".join(parts[3:])
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
+            cards = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
+        
+        send_flashcard(bot, call.message.chat.id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
+        safe_answer_callback(bot, call.id)
+
+def send_flashcard(bot, chat_id, cards, index, show_back, message_id, subject):
+    total = len(cards)
+    card = cards[index]
+    
+    text = f"🧠 **مراجعة: {md(subject)}** ({index + 1}/{total})\n\n"
+    if not show_back:
+        text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
+    else:
+        text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
+        
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # زر التقليب
+    if not show_back:
+        markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
+        
+    # أزرار التنقل
+    nav = []
+    if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
+    if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
+    if nav: markup.row(*nav)
+    
+    markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
+    
+    if message_id:
+        try: bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
+        except Exception: pass
+    else:
+        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
