@@ -1,16 +1,16 @@
 from telebot import types
 from config import YEARS, SEMESTERS, CHANNEL_USERNAME
 
-# ==================== لوحات مفاتيح الطالب ====================
 def get_student_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # القائمة الرئيسية الاحترافية الجديدة (كما ورد في خطة التطوير)
-    markup.row("🏛 المواد الدراسية", "📝 الاختبارات")
+    # تعديل اسم الزر الأول هنا
+    markup.row("🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات")
     markup.row("📚 المكتبة", "🧠 البطاقات التعليمية")
     markup.row("📅 خطة الدراسة", "📈 تقدمي الدراسي")
     markup.row("🏆 الإنجازات", "🤖 المساعد الذكي")
     markup.row("💬 الدعم والملاحظات")
     return markup
+
 
 def get_exam_control_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
