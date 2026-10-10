@@ -36,11 +36,9 @@ def register_student_handlers(bot):
                 years = [r[0] for r in cur.fetchall()]
                 cur.close()
             finally: release_db(conn)
-
             if not years:
                 bot.send_message(message.chat.id, "📑 لا توجد ملفات في المكتبة حالياً.")
                 return
-            
             markup = types.InlineKeyboardMarkup()
             for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"pdfy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
@@ -54,11 +52,9 @@ def register_student_handlers(bot):
                 years = [r[0] for r in cur.fetchall()]
                 cur.close()
             finally: release_db(conn)
-
             if not years:
                 bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة حالياً. ترقبها قريباً!")
                 return
-            
             markup = types.InlineKeyboardMarkup()
             for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"fcy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
@@ -79,34 +75,42 @@ def register_student_handlers(bot):
     # ==================== الإحصائيات والمحفوظات ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
     def handle_show_stats(call):
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
         user_id = call.from_user.id
         bot.send_chat_action(call.message.chat.id, 'typing')
         conn = get_db()
         try:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*), AVG(percent) FROM quiz_results WHERE user_id=%s", (user_id,))
-            total_quizzes, avg_percent = cur.fetchone()
+            res = cur.fetchone()
+            total_quizzes, avg_percent = res if res else (0, 0)
+            
             cur.execute("SELECT subject, session_name, score, total, percent FROM quiz_results WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
             recent_results = cur.fetchall()
+            
             cur.execute("SELECT xp_points, level FROM users WHERE user_id=%s", (user_id,))
             user_data = cur.fetchone()
             cur.close()
+        except Exception as e:
+            total_quizzes, avg_percent, recent_results, user_data = 0, 0, [], None
         finally: release_db(conn)
 
         xp = user_data[0] if user_data else 0
         lvl = user_data[1] if user_data else 1
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
 
         if not total_quizzes or total_quizzes == 0:
-            bot.send_message(call.message.chat.id, "📊 لا توجد إحصائيات مسجلة لك بعد.")
+            bot.edit_message_text("📊 لا توجد إحصائيات مسجلة لك بعد. قم بإجراء اختبار لتبدأ بجمع النقاط!", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
             return safe_answer_callback(bot, call.id)
 
         avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
         msg = f"📈 **سجل إحصائياتك الدراسية:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
         for sub, sess, score, total, pct in recent_results:
             msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
-        bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
+        
+        try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        except Exception: pass
         safe_answer_callback(bot, call.id)
 
     @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
@@ -158,7 +162,7 @@ def register_student_handlers(bot):
         except Exception: pass
         safe_answer_callback(bot, call.id)
 
-    # ==================== التنقل في الدورات (التدريب) ====================
+    # ==================== التنقل في الدورات والمكتبة ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
     def handle_year_selection(call):
         year_num = int(call.data.split("_")[1])
@@ -169,7 +173,6 @@ def register_student_handlers(bot):
             semesters = [r[0] for r in cur.fetchall()]
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"sem_{year_num}_{s}"))
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
@@ -186,7 +189,6 @@ def register_student_handlers(bot):
             subjects = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for idx, (sub_name, cnt) in enumerate(subjects):
             markup.add(types.InlineKeyboardButton(f"📖 {sub_name} ({cnt})", callback_data=f"sb_{year_num}_{sem_num}_{idx}"))
@@ -209,7 +211,6 @@ def register_student_handlers(bot):
             sessions = [r[0] for r in cur.fetchall()]
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for s_idx, sess in enumerate(sessions):
             markup.add(types.InlineKeyboardButton(f"🗓️ {sess}", callback_data=f"ss_{year_num}_{sem_num}_{sub_idx}_{s_idx}"))
@@ -217,7 +218,6 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"📖 **مادة: {md(subject_name)}**\nاختر الدورة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    # ==================== المكتبة ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
     def handle_pdf_year(call):
         year_num = int(call.data.split("_")[1])
@@ -228,7 +228,6 @@ def register_student_handlers(bot):
             semesters = [r[0] for r in cur.fetchall()]
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"pdfs_{year_num}_{s}"))
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
@@ -245,7 +244,6 @@ def register_student_handlers(bot):
             subjects = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt})", callback_data=f"pdfb_{year_num}_{sem_num}_{idx}"))
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfy_{year_num}"))
@@ -267,7 +265,6 @@ def register_student_handlers(bot):
             pdfs = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for pdf_id, title in pdfs:
             row = [types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}")]
@@ -303,7 +300,6 @@ def register_student_handlers(bot):
             semesters = [r[0] for r in cur.fetchall()]
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"fcs_{year_num}_{s}"))
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
@@ -320,7 +316,6 @@ def register_student_handlers(bot):
             subjects = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         markup = types.InlineKeyboardMarkup()
         for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt} بطاقة)", callback_data=f"fcb_{year_num}_{sem_num}_{idx}"))
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"fcy_{year_num}"))
@@ -342,21 +337,16 @@ def register_student_handlers(bot):
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         if not cards: return safe_answer_callback(bot, call.id, "لا توجد بطاقات.", show_alert=True)
-        
-        # حفظ الجلسة في الذاكرة المؤقتة (سنستخدم json لتمرير البيانات في الكول باك لأنها بطاقات خفيفة)
         send_flashcard(bot, call.message.chat.id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id, "🚀 بدأت المراجعة!")
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcact_"))
     def handle_fc_action(call):
-        # fcact_ index _ showback(0/1) _ subject
         parts = call.data.split("_")
         idx = int(parts[1])
         show_back = int(parts[2]) == 1
         subject_name = "_".join(parts[3:])
-        
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -364,40 +354,30 @@ def register_student_handlers(bot):
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
-        
         send_flashcard(bot, call.message.chat.id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id)
 
 def send_flashcard(bot, chat_id, cards, index, show_back, message_id, subject):
     total = len(cards)
     card = cards[index]
-    
     text = f"🧠 **مراجعة: {md(subject)}** ({index + 1}/{total})\n\n"
     if not show_back:
         text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
     else:
         text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
-        
     markup = types.InlineKeyboardMarkup(row_width=2)
-    
-    # زر التقليب
     if not show_back:
         markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
     else:
         markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
-        
-    # أزرار التنقل
     nav = []
     if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
     if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
     if nav: markup.row(*nav)
-    
     markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
     
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception: pass
-    else:
-        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+    else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
