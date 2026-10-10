@@ -7,8 +7,9 @@ from utils import md, safe_answer_callback, check_subscription, send_sub_require
 def register_student_handlers(bot):
 
     # ==================== استجابة القائمة الرئيسية الجديدة ====================
+    # التعديل الأول هنا في قائمة استقبال الرسائل
     @bot.message_handler(func=lambda msg: msg.text in [
-        "🏛 المواد الدراسية", "📝 الاختبارات", "📚 المكتبة", 
+        "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
         "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
         "🏆 الإنجازات", "🤖 المساعد الذكي", "💬 الدعم والملاحظات"
     ])
@@ -21,12 +22,13 @@ def register_student_handlers(bot):
         try: bot.delete_message(message.chat.id, message.message_id)
         except Exception: pass
 
-        if text == "🏛 المواد الدراسية":
+        # التعديل الثاني هنا في شرط التحقق
+        if text == "🏛 تدريب الدورات المؤتمتة":
             markup = types.InlineKeyboardMarkup()
             for y_num, y_name in YEARS.items():
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"yr_{y_num}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "🏛 **المواد الدراسية:**\nاختر السنة الدراسية للبدء:", parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(message.chat.id, "🏛 **تدريب الدورات المؤتمتة:**\nاختر السنة الدراسية للبدء:", parse_mode="Markdown", reply_markup=markup)
 
         elif text == "📚 المكتبة":
             conn = get_db()
