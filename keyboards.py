@@ -1,9 +1,9 @@
 from telebot import types
 from config import YEARS, SEMESTERS, CHANNEL_USERNAME
 
+# ==================== لوحات مفاتيح الطالب ====================
 def get_student_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # تعديل اسم الزر الأول هنا
     markup.row("🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات")
     markup.row("📚 المكتبة", "🧠 البطاقات التعليمية")
     markup.row("📅 خطة الدراسة", "📈 تقدمي الدراسي")
@@ -11,13 +11,12 @@ def get_student_main_keyboard():
     markup.row("💬 الدعم والملاحظات")
     return markup
 
-
 def get_exam_control_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("➡️ السؤال التالي", "⬅️ السؤال السابق")
-    markup.row("💾 حفظ السؤال للمراجعة", "⚠️ الإبلاغ عن خطأ")
     markup.row("🔄 إعادة الاختبار", "🏁 إنهاء وعرض النتيجة")
-    markup.row("🏠 القائمة الرئيسية")
+    markup.row("💾 حفظ السؤال للمراجعة", "⚠️ الإبلاغ عن خطأ")
+    markup.row("📚 الانتقال إلى مادة أخرى", "🏠 القائمة الرئيسية")
     return markup
 
 def get_sub_required_inline():
@@ -33,10 +32,10 @@ def get_sub_required_inline():
 def get_admin_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📥 رفع أسئلة (Excel/CSV)", "📝 إضافة سؤال فردي")
+    markup.row("📇 إدارة البطاقات", "📄 رفع ملف PDF جديد") # تمت إضافة زر البطاقات هنا
     markup.row("📊 إحصائيات البوت", "🗑️ إدارة/حذف الأسئلة")
-    markup.row("🗂️ حذف دورة كاملة", "📄 رفع ملف PDF جديد")
-    markup.row("📢 إذاعة للجميع", "📤 تصدير الأسئلة (Excel)")
-    markup.row("📚 قائمة سنوات الحقوق", "📑 المكتبة والملفات PDF")
+    markup.row("🗂️ حذف دورة كاملة", "📤 تصدير الأسئلة (Excel)")
+    markup.row("📢 إذاعة للجميع", "📚 قائمة سنوات الحقوق")
     return markup
 
 def get_cancel_keyboard():
