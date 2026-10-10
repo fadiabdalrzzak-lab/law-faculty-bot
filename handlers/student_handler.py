@@ -1,13 +1,12 @@
 from telebot import types
-from config import YEARS, SEMESTERS
+from config import YEARS, SEMESTERS, OPTION_LETTERS
 from database import get_db, release_db, load_session_from_db, save_session_to_db
 from keyboards import get_student_main_keyboard, get_exam_control_keyboard
-from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg
+from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
 
 def register_student_handlers(bot):
 
     # ==================== استجابة القائمة الرئيسية الجديدة ====================
-    # التعديل الأول هنا في قائمة استقبال الرسائل
     @bot.message_handler(func=lambda msg: msg.text in [
         "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
         "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
@@ -22,7 +21,6 @@ def register_student_handlers(bot):
         try: bot.delete_message(message.chat.id, message.message_id)
         except Exception: pass
 
-        # التعديل الثاني هنا في شرط التحقق
         if text == "🏛 تدريب الدورات المؤتمتة":
             markup = types.InlineKeyboardMarkup()
             for y_num, y_name in YEARS.items():
@@ -59,6 +57,82 @@ def register_student_handlers(bot):
 
         else:
             bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
+
+    # ==================== الإحصائيات والمحفوظات ====================
+    @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
+    def handle_show_stats(call):
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
+        user_id = call.from_user.id
+        bot.send_chat_action(call.message.chat.id, 'typing')
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*), AVG(percent) FROM quiz_results WHERE user_id=%s", (user_id,))
+            total_quizzes, avg_percent = cur.fetchone()
+            cur.execute("SELECT subject, session_name, score, total, percent FROM quiz_results WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
+            recent_results = cur.fetchall()
+            cur.execute("SELECT xp_points, level FROM users WHERE user_id=%s", (user_id,))
+            user_data = cur.fetchone()
+            cur.close()
+        finally: release_db(conn)
+
+        xp = user_data[0] if user_data else 0
+        lvl = user_data[1] if user_data else 1
+
+        if not total_quizzes or total_quizzes == 0:
+            bot.send_message(call.message.chat.id, "📊 لا توجد إحصائيات مسجلة لك بعد.")
+            return safe_answer_callback(bot, call.id)
+
+        avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
+        msg = f"📈 **سجل إحصائياتك الدراسية:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
+        for sub, sess, score, total, pct in recent_results:
+            msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
+        bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
+    def handle_show_saved(call):
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
+        user_id = call.from_user.id
+        bot.send_chat_action(call.message.chat.id, 'typing')
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("""SELECT q.id, q.subject, q.exam_session, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option FROM questions q JOIN saved_questions s ON q.id = s.question_id WHERE s.user_id = %s""", (user_id,))
+            saved_qs = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        if not saved_qs:
+            bot.send_message(call.message.chat.id, "📂 ليس لديك أي أسئلة محفوظة بعد.")
+            return safe_answer_callback(bot, call.id)
+
+        bot.send_message(call.message.chat.id, f"📂 **قائمة الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
+        for q in saved_qs:
+            q_id, sub, sess, q_text, a, b, c, d, correct = q
+            marks = {"أ": a, "ب": b, "ج": c, "د": d}
+            lines = [f"{let}) {marks[let]}{' ✅' if let == correct else ''}" for let in OPTION_LETTERS]
+            msg_text = f"📌 **مادة:** {md(sub)} ({md(sess)})\n\n❓ **السؤال:** {md(q_text)}\n\n" + "\n".join(md(l) for l in lines)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsave_{q_id}"))
+            bot.send_message(call.message.chat.id, msg_text, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsave_"))
+    def handle_unsave(call):
+        q_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM saved_questions WHERE user_id=%s AND question_id=%s", (call.from_user.id, q_id))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
 
     # ==================== التنقل في المواد والدورات ====================
     @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
@@ -125,4 +199,95 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"📖 **مادة: {md(subject_name)}**\nاختر الدورة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    # (بقية مسارات المكتبة pdfy_، pdfs_، pdfb_، getpdf_ ستكون مشابهة تماماً وتعمل بشكل نظيف)
+    # ==================== المكتبة ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
+    def handle_pdf_year(call):
+        year_num = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT semester FROM pdf_files WHERE year=%s ORDER BY semester ASC", (year_num,))
+            semesters = [r[0] for r in cur.fetchall()]
+            cur.close()
+        finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"pdfs_{year_num}_{s}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text(f"🎓 **{YEARS[year_num]}**\nاختر الفصل:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfs_"))
+    def handle_pdf_semester(call):
+        _, year_num, sem_num = call.data.split("_")
+        year_num, sem_num = int(year_num), int(sem_num)
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            subjects = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt})", callback_data=f"pdfb_{year_num}_{sem_num}_{idx}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfy_{year_num}"))
+        bot.edit_message_text(f"📚 **{YEARS[year_num]} - {SEMESTERS[sem_num]}**\nاختر المادة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfb_"))
+    def handle_pdf_subject(call):
+        parts = call.data.split("_")
+        year_num, sem_num, sub_idx = map(int, parts[1:4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT subject FROM pdf_files WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
+            subjects = [r[0] for r in cur.fetchall()]
+            if sub_idx >= len(subjects): return
+            subject_name = subjects[sub_idx]
+            cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s ORDER BY id DESC", (year_num, sem_num, subject_name))
+            pdfs = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for pdf_id, title in pdfs:
+            row = [types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}")]
+            if is_admin(call.from_user.id): row.append(types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{pdf_id}_{year_num}_{sem_num}_{sub_idx}"))
+            markup.row(*row)
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
+        bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("getpdf_"))
+    def handle_get_pdf(call):
+        pdf_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT title, file_id FROM pdf_files WHERE id=%s", (pdf_id,))
+            res = cur.fetchone()
+            cur.close()
+        finally: release_db(conn)
+
+        if res:
+            bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown")
+            safe_answer_callback(bot, call.id, "تم الإرسال!")
+        else: safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("delpdf_"))
+    def handle_delete_pdf(call):
+        if not is_admin(call.from_user.id): return
+        parts = call.data.split("_")
+        pdf_id, year_num, sem_num, sub_idx = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM pdf_files WHERE id=%s", (pdf_id,))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "✅ تم الحذف!", show_alert=True)
+        call.data = f"pdfb_{year_num}_{sem_num}_{sub_idx}"
+        handle_pdf_subject(call)
