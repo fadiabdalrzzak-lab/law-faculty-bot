@@ -326,6 +326,7 @@ def register_student_handlers(bot):
     def handle_fc_start(call):
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
+        user_id = call.from_user.id
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -338,7 +339,7 @@ def register_student_handlers(bot):
             cur.close()
         finally: release_db(conn)
         if not cards: return safe_answer_callback(bot, call.id, "لا توجد بطاقات.", show_alert=True)
-        send_flashcard(bot, call.message.chat.id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
+        send_flashcard(bot, call.message.chat.id, user_id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id, "🚀 بدأت المراجعة!")
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcact_"))
@@ -347,6 +348,7 @@ def register_student_handlers(bot):
         idx = int(parts[1])
         show_back = int(parts[2]) == 1
         subject_name = "_".join(parts[3:])
+        user_id = call.from_user.id
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -355,10 +357,52 @@ def register_student_handlers(bot):
             cur.close()
         finally: release_db(conn)
         if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
-        send_flashcard(bot, call.message.chat.id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
+        send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id)
 
-def send_flashcard(bot, chat_id, cards, index, show_back, message_id, subject):
+    # زر حذف البطاقة (خاص بالمشرفين)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcdel_"))
+    def handle_fc_delete(call):
+        if not is_admin(call.from_user.id): 
+            return safe_answer_callback(bot, call.id, "⚠️ مخصص للمشرف فقط.", show_alert=True)
+        
+        parts = call.data.split("_")
+        card_id, index = int(parts[1]), int(parts[2])
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            # استخراج اسم المادة قبل الحذف للتمكن من جلب باقي البطاقات
+            cur.execute("SELECT subject FROM flashcards WHERE id=%s", (card_id,))
+            res = cur.fetchone()
+            if not res: return safe_answer_callback(bot, call.id, "❌ البطاقة غير موجودة أصلاً.", show_alert=True)
+            subject_name = res[0]
+            
+            # حذف البطاقة
+            cur.execute("DELETE FROM flashcards WHERE id=%s", (card_id,))
+            conn.commit()
+            
+            # جلب البطاقات المتبقية لنفس المادة
+            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
+            cards = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+        
+        safe_answer_callback(bot, call.id, "✅ تم حذف البطاقة بنجاح!", show_alert=True)
+        
+        if not cards:
+            try: bot.edit_message_text("🗑️ تم حذف جميع البطاقات الخاصة بهذه المادة.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception: pass
+            return
+            
+        # ضبط المؤشر في حال تم حذف البطاقة الأخيرة
+        if index >= len(cards): 
+            index = len(cards) - 1
+            
+        send_flashcard(bot, call.message.chat.id, call.from_user.id, cards, index, False, call.message.message_id, subject_name)
+
+
+def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, subject):
     total = len(cards)
     card = cards[index]
     text = f"🧠 **مراجعة: {md(subject)}** ({index + 1}/{total})\n\n"
@@ -366,15 +410,23 @@ def send_flashcard(bot, chat_id, cards, index, show_back, message_id, subject):
         text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
     else:
         text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
+    
     if not show_back:
         markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
     else:
         markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
+        
     nav = []
     if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
     if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
     if nav: markup.row(*nav)
+    
+    # إضافة زر الحذف إذا كان المستخدم مشرفاً
+    if is_admin(user_id):
+        markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة", callback_data=f"fcdel_{card[0]}_{index}"))
+        
     markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
     
     if message_id:
