@@ -10,7 +10,7 @@ def register_student_handlers(bot):
     @bot.message_handler(func=lambda msg: msg.text in [
         "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
         "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
-        "🏆 الإنجازات", "🤖 المساعد الذكي", "💬 الدعم والملاحظات"
+        "🏆 الإنجازات", "⚙️ إعدادات حسابي", "🤖 المساعد الذكي", "💬 الدعم والملاحظات"
     ])
     def handle_student_menus(message):
         user_id = message.from_user.id
@@ -62,16 +62,77 @@ def register_student_handlers(bot):
 
         elif text == "📈 تقدمي الدراسي":
             markup = types.InlineKeyboardMarkup()
-            # تم تعديل الزر ليكون (محفوظاتي) الشامل
             markup.row(types.InlineKeyboardButton("📂 محفوظاتي", callback_data="show_saved"), types.InlineKeyboardButton("📊 إحصائياتي", callback_data="show_stats"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "📈 **تقدمي الدراسي:**\nتتبع أدائك ومحفوظاتك من هنا:", parse_mode="Markdown", reply_markup=markup)
+
+        elif text == "⚙️ إعدادات حسابي":
+            markup = types.InlineKeyboardMarkup()
+            for y_num, y_name in YEARS.items():
+                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
+            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+            bot.send_message(message.chat.id, "⚙️ **إعدادات حسابي:**\nاختر سنتك الدراسية ليتم تخصيص تحدي اليوم بناءً عليها:", parse_mode="Markdown", reply_markup=markup)
 
         elif text == "💬 الدعم والملاحظات":
             bot.send_message(message.chat.id, "وُلد المشروع ليختصر وقتكم 💙.\nللدعم التقني والمقترحات تواصلوا معي مباشرة:\n👉 @Saqqer10")
 
         else:
             bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
+
+    # ==================== الإعدادات وتحديث بيانات الطالب ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_y_"))
+    def handle_set_year(call):
+        year = int(call.data.split("_")[2])
+        markup = types.InlineKeyboardMarkup()
+        for s_num, s_name in SEMESTERS.items():
+            markup.add(types.InlineKeyboardButton(s_name, callback_data=f"set_s_{year}_{s_num}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text(f"🎓 **{YEARS[year]}**\nالآن اختر الفصل الدراسي الخاص بك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
+    def handle_set_sem(call):
+        _, _, year, sem = call.data.split("_")
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET academic_year=%s, academic_semester=%s WHERE user_id=%s", (int(year), int(sem), call.from_user.id))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        bot.edit_message_text(f"✅ **تم ضبط إعداداتك بنجاح!**\nسنتك الدراسية: {YEARS[int(year)]} - {SEMESTERS[int(sem)]}\n\nستتلقى الآن (تحدي اليوم) المخصص لك آلياً بناءً على هذا الاختيار 🚀", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+        safe_answer_callback(bot, call.id, "✅ تم تحديث بياناتك!", show_alert=True)
+
+    # ==================== حل تحدي اليوم الآلي ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dc_ans_"))
+    def handle_daily_challenge_answer(call):
+        _, _, q_id_str, selected_letter = call.data.split("_")
+        q_id = int(q_id_str)
+        user_id = call.from_user.id
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT question_text, correct_option FROM questions WHERE id=%s", (q_id,))
+            row = cur.fetchone()
+            if not row:
+                return safe_answer_callback(bot, call.id, "السؤال لم يعد موجوداً.", show_alert=True)
+            
+            q_text, correct_letter = row[0], str(row[1]).strip()
+            
+            if selected_letter.lower() == correct_letter.lower():
+                msg = f"🎉 **إجابة صحيحة بطل!**\nلقد كسبت 20 نقطة XP ✨\n\n❓ {md(q_text)}\n\n✅ الجواب: ({correct_letter})"
+                cur.execute("UPDATE users SET xp_points = xp_points + 20 WHERE user_id = %s", (user_id,))
+                conn.commit()
+                safe_answer_callback(bot, call.id, "إجابة صحيحة! +20 XP", show_alert=True)
+            else:
+                msg = f"❌ **إجابة خاطئة!**\nلا بأس، الخطأ يعلمنا.\n\n❓ {md(q_text)}\n\n✅ الجواب الصحيح كان: ({correct_letter})"
+                safe_answer_callback(bot, call.id, "إجابة خاطئة!", show_alert=True)
+        finally: release_db(conn)
+        
+        # نقوم بتعديل الرسالة لإزالة الأزرار حتى لا يجيب مرة أخرى
+        try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+        except Exception: pass
 
     # ==================== الإحصائيات والمحفوظات الشاملة ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
@@ -108,7 +169,6 @@ def register_student_handlers(bot):
         except Exception: pass
         safe_answer_callback(bot, call.id)
 
-    # قائمة المحفوظات الفرعية
     @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
     def handle_saved_menu(call):
         markup = types.InlineKeyboardMarkup(row_width=1)
@@ -121,7 +181,6 @@ def register_student_handlers(bot):
         bot.edit_message_text("📂 **قسم المحفوظات:**\nاختر القسم الذي تود مراجعته:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    # 1. الأسئلة المحفوظة
     @bot.callback_query_handler(func=lambda call: call.data == "saved_qs")
     def handle_saved_qs(call):
         user_id = call.from_user.id
@@ -161,7 +220,6 @@ def register_student_handlers(bot):
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
 
-    # 2. ملفات PDF المحفوظة
     @bot.callback_query_handler(func=lambda call: call.data == "saved_pdfs")
     def handle_saved_pdfs(call):
         user_id = call.from_user.id
@@ -174,7 +232,6 @@ def register_student_handlers(bot):
         finally: release_db(conn)
 
         if not pdfs: return safe_answer_callback(bot, call.id, "📂 ليس لديك ملفات محفوظة.", show_alert=True)
-        
         markup = types.InlineKeyboardMarkup()
         for pdf_id, title in pdfs:
             markup.row(
@@ -209,9 +266,8 @@ def register_student_handlers(bot):
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
         call.data = "saved_pdfs"
-        handle_saved_pdfs(call) # تحديث القائمة فوراً
+        handle_saved_pdfs(call)
 
-    # 3. البطاقات المحفوظة
     @bot.callback_query_handler(func=lambda call: call.data == "saved_fcs")
     def handle_saved_fcs(call):
         user_id = call.from_user.id
@@ -222,7 +278,6 @@ def register_student_handlers(bot):
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         if not cards: return safe_answer_callback(bot, call.id, "📂 ليس لديك بطاقات محفوظة.", show_alert=True)
         send_flashcard(bot, call.message.chat.id, user_id, cards, 0, False, call.message.message_id, "البطاقات المحفوظة")
         safe_answer_callback(bot, call.id, "🚀 بدء مراجعة البطاقات المحفوظة!")
@@ -253,7 +308,6 @@ def register_student_handlers(bot):
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-        
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة من المحفوظات.", show_alert=True)
         if not cards:
             try: bot.edit_message_text("📂 لا توجد بطاقات محفوظة متبقية.", chat_id=call.message.chat.id, message_id=call.message.message_id)
@@ -261,7 +315,6 @@ def register_student_handlers(bot):
             return
         if index >= len(cards): index = len(cards) - 1
         send_flashcard(bot, call.message.chat.id, user_id, cards, index, False, call.message.message_id, "البطاقات المحفوظة")
-
 
     @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
     def handle_delete_msg(call):
@@ -527,7 +580,6 @@ def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, s
     if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
     if nav: markup.row(*nav)
     
-    # أزرار الحفظ في قسم المحفوظات أو الإزالة منه
     if subject == "البطاقات المحفوظة":
         markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsavefc_{card[0]}_{index}"))
     else:
