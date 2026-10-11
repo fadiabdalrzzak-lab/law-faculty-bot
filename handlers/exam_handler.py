@@ -84,7 +84,7 @@ def register_exam_handlers(bot):
         else:
             bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=get_student_main_keyboard())
 
-    # ==================== استقبال أزرار التحكم بالاختبار (الكيبورد السفلي) ====================
+    # ==================== استقبال أزرار التحكم بالاختبار ====================
     @bot.message_handler(func=lambda msg: msg.text in [
         "➡️ السؤال التالي", "⬅️ السؤال السابق", "🔄 إعادة الاختبار", 
         "🏁 إنهاء وعرض النتيجة", "💾 حفظ السؤال للمراجعة", 
@@ -209,7 +209,7 @@ def register_exam_handlers(bot):
         user_id = call.from_user.id
         mistakes_data = user_mistakes_cache.get(user_id)
         if not mistakes_data:
-            safe_answer_callback(bot, call.id, "⚠️ لا توجد أخطاء مسجلة أو انتهت الجلسة.", show_alert=True)
+            safe_answer_callback(bot, call.id, "⚠️ لا توجد أخطاء مسجلة.", show_alert=True)
             return
         save_session_to_db(user_id, {
             "question_ids": mistakes_data["q_ids"], "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [],
@@ -222,6 +222,8 @@ def register_exam_handlers(bot):
         send_current_question(call.message.chat.id, user_id, load_session_from_db(user_id))
 
     # ==================== بدء الاختبار ====================
+    
+    # 1. اختبار دورة محددة (ميزة: تدريب الدورات)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("ss_"))
     def handle_session_selection(call):
         parts = call.data.split("_")
@@ -244,4 +246,34 @@ def register_exam_handlers(bot):
         except Exception: pass
         safe_answer_callback(bot, call.id, "🚀 بدأ الاختبار!")
         bot.send_message(call.message.chat.id, f"🚀 **بدء اختبار: {md(subject_name)}**\nالأسئلة: {len(q_ids)}", parse_mode="Markdown", reply_markup=get_exam_control_keyboard())
+        send_current_question(call.message.chat.id, user_id, load_session_from_db(user_id))
+
+    # 2. امتحان شامل عشوائي (ميزة: محاكاة الاختبار الفعلي)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("randex_"))
+    def handle_random_exam(call):
+        parts = call.data.split("_")
+        year_num, sem_num, sub_idx = map(int, parts[1:4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            subject_name = cur.fetchall()[sub_idx][0]
+            
+            # سحب 50 سؤال عشوائي من كافة دورات هذه المادة
+            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY RANDOM() LIMIT 50", (year_num, sem_num, subject_name))
+            q_ids = [r[0] for r in cur.fetchall()]
+            cur.close()
+        finally: release_db(conn)
+
+        user_id = call.from_user.id
+        if not q_ids:
+            return safe_answer_callback(bot, call.id, "⚠️ لا توجد أسئلة كافية لهذه المادة.", show_alert=True)
+            
+        save_session_to_db(user_id, {"question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [], "subject": subject_name, "session_name": "محاكاة امتحان شامل (عشوائي)"})
+        
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
+        
+        safe_answer_callback(bot, call.id, "⏱️ بدأ الامتحان الشامل!")
+        bot.send_message(call.message.chat.id, f"⏱️ **محاكاة امتحان شامل: {md(subject_name)}**\nالأسئلة: {len(q_ids)}\nحاول الإجابة بتركيز عالٍ وكأنك في قاعة الامتحان!", parse_mode="Markdown", reply_markup=get_exam_control_keyboard())
         send_current_question(call.message.chat.id, user_id, load_session_from_db(user_id))
