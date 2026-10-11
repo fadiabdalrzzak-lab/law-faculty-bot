@@ -20,14 +20,19 @@ def init_db():
     try:
         cur = conn.cursor()
         
+        # تمت إضافة حقول السنة والفصل الدراسي هنا
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 username TEXT, first_name TEXT,
                 xp_points INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
+                academic_year INTEGER DEFAULT 0,
+                academic_semester INTEGER DEFAULT 0,
                 join_date TIMESTAMP DEFAULT NOW()
             );
         """)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_semester INTEGER DEFAULT 0;")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS questions (
@@ -45,7 +50,6 @@ def init_db():
             );
         """)
 
-        # جداول المحفوظات الشاملة (أسئلة، ملفات، بطاقات)
         cur.execute("CREATE TABLE IF NOT EXISTS saved_questions (user_id BIGINT, question_id INTEGER, PRIMARY KEY (user_id, question_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_flashcards (user_id BIGINT, flashcard_id INTEGER, PRIMARY KEY (user_id, flashcard_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_pdfs (user_id BIGINT, pdf_id INTEGER, PRIMARY KEY (user_id, pdf_id));")
