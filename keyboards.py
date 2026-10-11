@@ -1,14 +1,13 @@
 from telebot import types
 from config import YEARS, SEMESTERS, CHANNEL_USERNAME
 
-# ==================== لوحات مفاتيح الطالب ====================
 def get_student_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.row("🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات")
     markup.row("📚 المكتبة", "🧠 البطاقات التعليمية")
     markup.row("📅 خطة الدراسة", "📈 تقدمي الدراسي")
-    markup.row("🏆 الإنجازات", "🤖 المساعد الذكي")
-    markup.row("💬 الدعم والملاحظات")
+    markup.row("🏆 الإنجازات", "⚙️ إعدادات حسابي") # زر الإعدادات الجديد
+    markup.row("🤖 المساعد الذكي", "💬 الدعم والملاحظات")
     return markup
 
 def get_exam_control_keyboard():
@@ -28,11 +27,10 @@ def get_sub_required_inline():
     markup.add(types.InlineKeyboardButton("✅ تحققت من الانضمام، دعنا نبدأ!", callback_data="check_sub"))
     return markup
 
-# ==================== لوحات مفاتيح المشرف ====================
 def get_admin_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📥 رفع أسئلة (Excel/CSV)", "📝 إضافة سؤال فردي")
-    markup.row("📇 إدارة البطاقات", "📄 رفع ملف PDF جديد") # تمت إضافة زر البطاقات هنا
+    markup.row("📇 إدارة البطاقات", "📄 رفع ملف PDF جديد")
     markup.row("📊 إحصائيات البوت", "🗑️ إدارة/حذف الأسئلة")
     markup.row("🗂️ حذف دورة كاملة", "📤 تصدير الأسئلة (Excel)")
     markup.row("📢 إذاعة للجميع", "📚 قائمة سنوات الحقوق")
