@@ -45,7 +45,11 @@ def init_db():
             );
         """)
 
+        # جداول المحفوظات الشاملة (أسئلة، ملفات، بطاقات)
         cur.execute("CREATE TABLE IF NOT EXISTS saved_questions (user_id BIGINT, question_id INTEGER, PRIMARY KEY (user_id, question_id));")
+        cur.execute("CREATE TABLE IF NOT EXISTS saved_flashcards (user_id BIGINT, flashcard_id INTEGER, PRIMARY KEY (user_id, flashcard_id));")
+        cur.execute("CREATE TABLE IF NOT EXISTS saved_pdfs (user_id BIGINT, pdf_id INTEGER, PRIMARY KEY (user_id, pdf_id));")
+
         cur.execute("CREATE TABLE IF NOT EXISTS quiz_sessions (user_id BIGINT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMP DEFAULT NOW());")
         
         cur.execute("""
@@ -56,7 +60,6 @@ def init_db():
             );
         """)
 
-        # جدول البطاقات التعليمية المحدث لدعم الفرز حسب السنة والفصل
         cur.execute("""
             CREATE TABLE IF NOT EXISTS flashcards (
                 id SERIAL PRIMARY KEY,
