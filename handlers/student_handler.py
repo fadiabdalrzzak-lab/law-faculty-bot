@@ -28,6 +28,14 @@ def register_student_handlers(bot):
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "🏛 **تدريب الدورات المؤتمتة:**\nاختر السنة الدراسية للبدء:", parse_mode="Markdown", reply_markup=markup)
 
+        # تفعيل زر الاختبارات (المحاكاة العشوائية)
+        elif text == "📝 الاختبارات":
+            markup = types.InlineKeyboardMarkup()
+            for y_num, y_name in YEARS.items():
+                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"exm_yr_{y_num}"))
+            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+            bot.send_message(message.chat.id, "⏱️ **محاكاة الاختبارات الشاملة:**\nسيتم توليد امتحان عشوائي من كافة دورات المادة.\nاختر السنة الدراسية:", parse_mode="Markdown", reply_markup=markup)
+
         elif text == "📚 المكتبة":
             conn = get_db()
             try:
@@ -79,6 +87,41 @@ def register_student_handlers(bot):
         else:
             bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
 
+    # ==================== التنقل في الاختبارات الشاملة (المحاكاة) ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_yr_"))
+    def handle_exm_year(call):
+        year_num = int(call.data.split("_")[2])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s ORDER BY semester ASC", (year_num,))
+            semesters = [r[0] for r in cur.fetchall()]
+            cur.close()
+        finally: release_db(conn)
+        markup = types.InlineKeyboardMarkup()
+        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"exm_sem_{year_num}_{s}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text(f"🎓 **{YEARS[year_num]}**\nاختر الفصل لمحاكاة الامتحان:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_sem_"))
+    def handle_exm_semester(call):
+        _, _, year_num, sem_num = call.data.split("_")
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
+            subjects = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+        markup = types.InlineKeyboardMarkup()
+        for idx, (sub_name, cnt) in enumerate(subjects):
+            # الزر يرسل إشارة randex للبدء المباشر للاختبار العشوائي
+            markup.add(types.InlineKeyboardButton(f"📖 {sub_name} (محاكاة)", callback_data=f"randex_{year_num}_{sem_num}_{idx}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"exm_yr_{year_num}"))
+        bot.edit_message_text(f"📚 **المواد:**\nاختر المادة لتوليد امتحان شامل عشوائي:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
     # ==================== الإعدادات وتحديث بيانات الطالب ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("set_y_"))
     def handle_set_year(call):
@@ -109,17 +152,13 @@ def register_student_handlers(bot):
         _, _, q_id_str, selected_letter = call.data.split("_")
         q_id = int(q_id_str)
         user_id = call.from_user.id
-        
         conn = get_db()
         try:
             cur = conn.cursor()
             cur.execute("SELECT question_text, correct_option FROM questions WHERE id=%s", (q_id,))
             row = cur.fetchone()
-            if not row:
-                return safe_answer_callback(bot, call.id, "السؤال لم يعد موجوداً.", show_alert=True)
-            
+            if not row: return safe_answer_callback(bot, call.id, "السؤال لم يعد موجوداً.", show_alert=True)
             q_text, correct_letter = row[0], str(row[1]).strip()
-            
             if selected_letter.lower() == correct_letter.lower():
                 msg = f"🎉 **إجابة صحيحة بطل!**\nلقد كسبت 20 نقطة XP ✨\n\n❓ {md(q_text)}\n\n✅ الجواب: ({correct_letter})"
                 cur.execute("UPDATE users SET xp_points = xp_points + 20 WHERE user_id = %s", (user_id,))
@@ -129,8 +168,6 @@ def register_student_handlers(bot):
                 msg = f"❌ **إجابة خاطئة!**\nلا بأس، الخطأ يعلمنا.\n\n❓ {md(q_text)}\n\n✅ الجواب الصحيح كان: ({correct_letter})"
                 safe_answer_callback(bot, call.id, "إجابة خاطئة!", show_alert=True)
         finally: release_db(conn)
-        
-        # نقوم بتعديل الرسالة لإزالة الأزرار حتى لا يجيب مرة أخرى
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
         except Exception: pass
 
@@ -153,15 +190,12 @@ def register_student_handlers(bot):
         except Exception:
             total_quizzes, avg_percent, recent_results, user_data = 0, 0, [], None
         finally: release_db(conn)
-
         xp, lvl = user_data[0] if user_data else 0, user_data[1] if user_data else 1
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-
         if not total_quizzes or total_quizzes == 0:
             bot.edit_message_text("📊 لا توجد إحصائيات مسجلة لك بعد. قم بإجراء اختبار لتبدأ بجمع النقاط!", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
             return safe_answer_callback(bot, call.id)
-
         avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
         msg = f"📈 **سجل إحصائياتك الدراسية:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
         for sub, sess, score, total, pct in recent_results: msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
@@ -192,7 +226,6 @@ def register_student_handlers(bot):
             saved_qs = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         if not saved_qs:
             return safe_answer_callback(bot, call.id, "📂 ليس لديك أسئلة محفوظة.", show_alert=True)
         bot.send_message(call.message.chat.id, f"📝 **الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
@@ -230,7 +263,6 @@ def register_student_handlers(bot):
             pdfs = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-
         if not pdfs: return safe_answer_callback(bot, call.id, "📂 ليس لديك ملفات محفوظة.", show_alert=True)
         markup = types.InlineKeyboardMarkup()
         for pdf_id, title in pdfs:
@@ -529,10 +561,8 @@ def register_student_handlers(bot):
     def handle_fc_delete(call):
         if not is_admin(call.from_user.id): 
             return safe_answer_callback(bot, call.id, "⚠️ مخصص للمشرف فقط.", show_alert=True)
-        
         parts = call.data.split("_")
         card_id, index = int(parts[1]), int(parts[2])
-        
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -540,22 +570,17 @@ def register_student_handlers(bot):
             res = cur.fetchone()
             if not res: return safe_answer_callback(bot, call.id, "❌ البطاقة غير موجودة أصلاً.", show_alert=True)
             subject_name = res[0]
-            
             cur.execute("DELETE FROM flashcards WHERE id=%s", (card_id,))
             conn.commit()
-            
             cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
-        
         safe_answer_callback(bot, call.id, "✅ تم حذف البطاقة بنجاح!", show_alert=True)
-        
         if not cards:
             try: bot.edit_message_text("🗑️ تم حذف جميع البطاقات الخاصة بهذه المادة.", chat_id=call.message.chat.id, message_id=call.message.message_id)
             except Exception: pass
             return
-            
         if index >= len(cards): index = len(cards) - 1
         send_flashcard(bot, call.message.chat.id, call.from_user.id, cards, index, False, call.message.message_id, subject_name)
 
@@ -567,29 +592,22 @@ def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, s
         text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
     else:
         text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
-    
     markup = types.InlineKeyboardMarkup(row_width=2)
-    
     if not show_back:
         markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
     else:
         markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
-        
     nav = []
     if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
     if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
     if nav: markup.row(*nav)
-    
     if subject == "البطاقات المحفوظة":
         markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsavefc_{card[0]}_{index}"))
     else:
         markup.add(types.InlineKeyboardButton("🔖 حفظ البطاقة للمراجعة", callback_data=f"savefc_{card[0]}"))
-    
     if is_admin(user_id) and subject != "البطاقات المحفوظة":
         markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة (للأدمن)", callback_data=f"fcdel_{card[0]}_{index}"))
-        
     markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
-    
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception: pass
