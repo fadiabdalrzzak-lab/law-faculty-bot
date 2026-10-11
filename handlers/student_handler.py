@@ -62,7 +62,8 @@ def register_student_handlers(bot):
 
         elif text == "📈 تقدمي الدراسي":
             markup = types.InlineKeyboardMarkup()
-            markup.row(types.InlineKeyboardButton("🔖 أسئلتي المحفوظة", callback_data="show_saved"), types.InlineKeyboardButton("📊 إحصائياتي", callback_data="show_stats"))
+            # تم تعديل الزر ليكون (محفوظاتي) الشامل
+            markup.row(types.InlineKeyboardButton("📂 محفوظاتي", callback_data="show_saved"), types.InlineKeyboardButton("📊 إحصائياتي", callback_data="show_stats"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "📈 **تقدمي الدراسي:**\nتتبع أدائك ومحفوظاتك من هنا:", parse_mode="Markdown", reply_markup=markup)
 
@@ -72,7 +73,7 @@ def register_student_handlers(bot):
         else:
             bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
 
-    # ==================== الإحصائيات والمحفوظات ====================
+    # ==================== الإحصائيات والمحفوظات الشاملة ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
     def handle_show_stats(call):
         user_id = call.from_user.id
@@ -83,20 +84,16 @@ def register_student_handlers(bot):
             cur.execute("SELECT COUNT(*), AVG(percent) FROM quiz_results WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
             total_quizzes, avg_percent = res if res else (0, 0)
-            
             cur.execute("SELECT subject, session_name, score, total, percent FROM quiz_results WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
             recent_results = cur.fetchall()
-            
             cur.execute("SELECT xp_points, level FROM users WHERE user_id=%s", (user_id,))
             user_data = cur.fetchone()
             cur.close()
-        except Exception as e:
+        except Exception:
             total_quizzes, avg_percent, recent_results, user_data = 0, 0, [], None
         finally: release_db(conn)
 
-        xp = user_data[0] if user_data else 0
-        lvl = user_data[1] if user_data else 1
-        
+        xp, lvl = user_data[0] if user_data else 0, user_data[1] if user_data else 1
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
 
@@ -106,17 +103,27 @@ def register_student_handlers(bot):
 
         avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
         msg = f"📈 **سجل إحصائياتك الدراسية:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
-        for sub, sess, score, total, pct in recent_results:
-            msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
-        
+        for sub, sess, score, total, pct in recent_results: msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception: pass
         safe_answer_callback(bot, call.id)
 
+    # قائمة المحفوظات الفرعية
     @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
-    def handle_show_saved(call):
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
+    def handle_saved_menu(call):
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("📝 الأسئلة المحفوظة", callback_data="saved_qs"),
+            types.InlineKeyboardButton("🧠 البطاقات المحفوظة", callback_data="saved_fcs"),
+            types.InlineKeyboardButton("📄 ملفات PDF المحفوظة", callback_data="saved_pdfs"),
+            types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message")
+        )
+        bot.edit_message_text("📂 **قسم المحفوظات:**\nاختر القسم الذي تود مراجعته:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    # 1. الأسئلة المحفوظة
+    @bot.callback_query_handler(func=lambda call: call.data == "saved_qs")
+    def handle_saved_qs(call):
         user_id = call.from_user.id
         bot.send_chat_action(call.message.chat.id, 'typing')
         conn = get_db()
@@ -128,10 +135,8 @@ def register_student_handlers(bot):
         finally: release_db(conn)
 
         if not saved_qs:
-            bot.send_message(call.message.chat.id, "📂 ليس لديك أي أسئلة محفوظة بعد.")
-            return safe_answer_callback(bot, call.id)
-
-        bot.send_message(call.message.chat.id, f"📂 **قائمة الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
+            return safe_answer_callback(bot, call.id, "📂 ليس لديك أسئلة محفوظة.", show_alert=True)
+        bot.send_message(call.message.chat.id, f"📝 **الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
         for q in saved_qs:
             q_id, sub, sess, q_text, a, b, c, d, correct = q
             marks = {"أ": a, "ب": b, "ج": c, "د": d}
@@ -156,13 +161,115 @@ def register_student_handlers(bot):
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
 
+    # 2. ملفات PDF المحفوظة
+    @bot.callback_query_handler(func=lambda call: call.data == "saved_pdfs")
+    def handle_saved_pdfs(call):
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT p.id, p.title FROM pdf_files p JOIN saved_pdfs s ON p.id = s.pdf_id WHERE s.user_id = %s ORDER BY p.id DESC", (user_id,))
+            pdfs = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        if not pdfs: return safe_answer_callback(bot, call.id, "📂 ليس لديك ملفات محفوظة.", show_alert=True)
+        
+        markup = types.InlineKeyboardMarkup()
+        for pdf_id, title in pdfs:
+            markup.row(
+                types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}"),
+                types.InlineKeyboardButton("🗑️", callback_data=f"unsavepdf_{pdf_id}")
+            )
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_saved"))
+        bot.edit_message_text("📂 **ملفات PDF المحفوظة:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("savepdf_"))
+    def handle_save_pdf(call):
+        pdf_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("INSERT INTO saved_pdfs (user_id, pdf_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, pdf_id))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "✅ تم حفظ الملف في قسم المحفوظات!", show_alert=True)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsavepdf_"))
+    def handle_unsave_pdf(call):
+        pdf_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM saved_pdfs WHERE user_id=%s AND pdf_id=%s", (call.from_user.id, pdf_id))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
+        call.data = "saved_pdfs"
+        handle_saved_pdfs(call) # تحديث القائمة فوراً
+
+    # 3. البطاقات المحفوظة
+    @bot.callback_query_handler(func=lambda call: call.data == "saved_fcs")
+    def handle_saved_fcs(call):
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
+            cards = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+
+        if not cards: return safe_answer_callback(bot, call.id, "📂 ليس لديك بطاقات محفوظة.", show_alert=True)
+        send_flashcard(bot, call.message.chat.id, user_id, cards, 0, False, call.message.message_id, "البطاقات المحفوظة")
+        safe_answer_callback(bot, call.id, "🚀 بدء مراجعة البطاقات المحفوظة!")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("savefc_"))
+    def handle_save_fc(call):
+        card_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("INSERT INTO saved_flashcards (user_id, flashcard_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, card_id))
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "✅ تم الحفظ في قسم المحفوظات!", show_alert=True)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsavefc_"))
+    def handle_unsave_fc(call):
+        parts = call.data.split("_")
+        card_id, index = int(parts[1]), int(parts[2])
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM saved_flashcards WHERE user_id=%s AND flashcard_id=%s", (user_id, card_id))
+            conn.commit()
+            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
+            cards = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+        
+        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة من المحفوظات.", show_alert=True)
+        if not cards:
+            try: bot.edit_message_text("📂 لا توجد بطاقات محفوظة متبقية.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception: pass
+            return
+        if index >= len(cards): index = len(cards) - 1
+        send_flashcard(bot, call.message.chat.id, user_id, cards, index, False, call.message.message_id, "البطاقات المحفوظة")
+
+
     @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
     def handle_delete_msg(call):
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
         safe_answer_callback(bot, call.id)
 
-    # ==================== التنقل في الدورات والمكتبة ====================
+    # ==================== التنقل العام (مواد، دورات، مكتبة) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
     def handle_year_selection(call):
         year_num = int(call.data.split("_")[1])
@@ -285,7 +392,9 @@ def register_student_handlers(bot):
             cur.close()
         finally: release_db(conn)
         if res:
-            bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔖 حفظ الملف في المحفوظات", callback_data=f"savepdf_{pdf_id}"))
+            bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown", reply_markup=markup)
             safe_answer_callback(bot, call.id, "تم الإرسال!")
         else: safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
 
@@ -352,7 +461,10 @@ def register_student_handlers(bot):
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
+            if subject_name == "البطاقات المحفوظة":
+                cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
+            else:
+                cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
             cards = cur.fetchall()
             cur.close()
         finally: release_db(conn)
@@ -360,7 +472,6 @@ def register_student_handlers(bot):
         send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id)
 
-    # زر حذف البطاقة (خاص بالمشرفين)
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcdel_"))
     def handle_fc_delete(call):
         if not is_admin(call.from_user.id): 
@@ -372,17 +483,14 @@ def register_student_handlers(bot):
         conn = get_db()
         try:
             cur = conn.cursor()
-            # استخراج اسم المادة قبل الحذف للتمكن من جلب باقي البطاقات
             cur.execute("SELECT subject FROM flashcards WHERE id=%s", (card_id,))
             res = cur.fetchone()
             if not res: return safe_answer_callback(bot, call.id, "❌ البطاقة غير موجودة أصلاً.", show_alert=True)
             subject_name = res[0]
             
-            # حذف البطاقة
             cur.execute("DELETE FROM flashcards WHERE id=%s", (card_id,))
             conn.commit()
             
-            # جلب البطاقات المتبقية لنفس المادة
             cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
             cards = cur.fetchall()
             cur.close()
@@ -395,12 +503,8 @@ def register_student_handlers(bot):
             except Exception: pass
             return
             
-        # ضبط المؤشر في حال تم حذف البطاقة الأخيرة
-        if index >= len(cards): 
-            index = len(cards) - 1
-            
+        if index >= len(cards): index = len(cards) - 1
         send_flashcard(bot, call.message.chat.id, call.from_user.id, cards, index, False, call.message.message_id, subject_name)
-
 
 def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, subject):
     total = len(cards)
@@ -423,9 +527,14 @@ def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, s
     if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
     if nav: markup.row(*nav)
     
-    # إضافة زر الحذف إذا كان المستخدم مشرفاً
-    if is_admin(user_id):
-        markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة", callback_data=f"fcdel_{card[0]}_{index}"))
+    # أزرار الحفظ في قسم المحفوظات أو الإزالة منه
+    if subject == "البطاقات المحفوظة":
+        markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsavefc_{card[0]}_{index}"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔖 حفظ البطاقة للمراجعة", callback_data=f"savefc_{card[0]}"))
+    
+    if is_admin(user_id) and subject != "البطاقات المحفوظة":
+        markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة (للأدمن)", callback_data=f"fcdel_{card[0]}_{index}"))
         
     markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
     
