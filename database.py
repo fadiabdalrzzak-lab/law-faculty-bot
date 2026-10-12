@@ -12,7 +12,10 @@ def init_pool():
 def get_db(): return db_pool.getconn()
 
 def release_db(conn):
-    try: db_pool.putconn(conn)
+    try: 
+        # هذا السطر السحري يمنع تجميد قاعدة البيانات للأبد
+        conn.rollback() 
+        db_pool.putconn(conn)
     except Exception: pass
 
 def init_db():
@@ -30,6 +33,8 @@ def init_db():
                 join_date TIMESTAMP DEFAULT NOW()
             );
         """)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS xp_points INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_semester INTEGER DEFAULT 0;")
         
@@ -62,7 +67,6 @@ def init_db():
                 taken_at TIMESTAMP DEFAULT NOW()
             );
         """)
-        # هذا هو السطر الذي سيقوم بإصلاح وحل مشكلة عدم حفظ الاختبارات!
         cur.execute("ALTER TABLE quiz_results ADD COLUMN IF NOT EXISTS quiz_type TEXT DEFAULT 'training';")
 
         cur.execute("""
@@ -100,6 +104,9 @@ def init_db():
 
         conn.commit()
         cur.close()
+    except Exception as e:
+        conn.rollback()
+        print("DB INIT ERROR:", e)
     finally:
         release_db(conn)
 
@@ -110,6 +117,9 @@ def save_session_to_db(user_id, data):
         cur.execute("""INSERT INTO quiz_sessions (user_id, data, updated_at) VALUES (%s, %s::jsonb, NOW()) ON CONFLICT (user_id) DO UPDATE SET data=%s::jsonb, updated_at=NOW()""", (user_id, json.dumps(data), json.dumps(data)))
         conn.commit()
         cur.close()
+    except Exception as e:
+        conn.rollback()
+        print("Save Session Error:", e)
     finally: release_db(conn)
 
 def load_session_from_db(user_id):
@@ -123,6 +133,10 @@ def load_session_from_db(user_id):
         d = row[0]
         if isinstance(d, str): d = json.loads(d)
         return d
+    except Exception as e:
+        conn.rollback()
+        print("Load Session Error:", e)
+        return None
     finally: release_db(conn)
 
 def delete_session(user_id):
@@ -132,4 +146,7 @@ def delete_session(user_id):
         cur.execute("DELETE FROM quiz_sessions WHERE user_id=%s", (user_id,))
         conn.commit()
         cur.close()
+    except Exception as e:
+        conn.rollback()
+        print("Delete Session Error:", e)
     finally: release_db(conn)
