@@ -1,6 +1,7 @@
 from telebot import types
 from config import YEARS, SEMESTERS, OPTION_LETTERS
-from database import get_db, release_db
+# تم إضافة دوال حفظ وتحميل الجلسة هنا لإصلاح المشكلة الجوهرية
+from database import get_db, release_db, save_session_to_db, load_session_from_db
 from keyboards import get_student_main_keyboard, get_exam_control_keyboard, get_real_exam_control_keyboard
 from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
 import json
