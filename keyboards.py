@@ -6,16 +6,25 @@ def get_student_main_keyboard():
     markup.row("🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات")
     markup.row("📚 المكتبة", "🧠 البطاقات التعليمية")
     markup.row("📅 خطة الدراسة", "📈 تقدمي الدراسي")
-    markup.row("🏆 الإنجازات", "⚙️ إعدادات حسابي") # زر الإعدادات الجديد
+    markup.row("🏆 الإنجازات", "⚙️ إعدادات حسابي")
     markup.row("🤖 المساعد الذكي", "💬 الدعم والملاحظات")
     return markup
 
+# كيبورد التدريب (يحتوي كل أزرار المساعدة)
 def get_exam_control_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("➡️ السؤال التالي", "⬅️ السؤال السابق")
     markup.row("🔄 إعادة الاختبار", "🏁 إنهاء وعرض النتيجة")
     markup.row("💾 حفظ السؤال للمراجعة", "⚠️ الإبلاغ عن خطأ")
     markup.row("📚 الانتقال إلى مادة أخرى", "🏠 القائمة الرئيسية")
+    return markup
+
+# كيبورد المحاكاة الصارم (للاختبار الفعلي)
+def get_real_exam_control_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("➡️ السؤال التالي", "⬅️ السؤال السابق")
+    markup.row("🏁 إنهاء وتسليم الورقة")
+    markup.row("🏠 القائمة الرئيسية")
     return markup
 
 def get_sub_required_inline():
