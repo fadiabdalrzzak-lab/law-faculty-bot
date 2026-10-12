@@ -57,10 +57,8 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=markup)
             return
         except Exception as e:
-            # حظر التكرار: إذا كانت الرسالة متطابقة، تجاهل التحديث ولا ترسل رسالة جديدة
             if "not modified" in str(e).lower():
                 return
-            # في حال وجود أخطاء أخرى كمسح الرسالة، سيستمر الكود ويرسلها من جديد
 
     msg = bot.send_message(chat_id, full_text, parse_mode="Markdown", reply_markup=markup)
     session["q_msg_id"] = msg.message_id
@@ -78,6 +76,8 @@ def finish_exam(bot, chat_id, user_id, session):
             cur.execute("SELECT id, correct_option FROM questions WHERE id = ANY(%s)", (session["question_ids"],))
             correct_answers = {str(r[0]): str(r[1]).strip().lower() for r in cur.fetchall()}
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
 
         correct, wrong = 0, 0
@@ -109,10 +109,13 @@ def finish_exam(bot, chat_id, user_id, session):
         cur = conn.cursor()
         cur.execute("""INSERT INTO quiz_results (user_id, subject, session_name, score, total, percent, quiz_type) VALUES (%s,%s,%s,%s,%s,%s,%s)""", (user_id, session.get("subject", ""), session.get("session_name", ""), correct, total, percent, quiz_type))
         xp_gained = correct * 15 if quiz_type == "exam" else correct * 10
-        cur.execute("UPDATE users SET xp_points = xp_points + %s WHERE user_id = %s", (xp_gained, user_id))
+        # تحديث ذكي: إضافة المستخدم للسجل إجبارياً في حال لم يكن موجوداً لضمان حفظ نقاطه
+        cur.execute("INSERT INTO users (user_id, xp_points) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET xp_points = users.xp_points + EXCLUDED.xp_points", (user_id, xp_gained))
         conn.commit()
         cur.close()
-    except Exception: pass
+    except Exception as e:
+        conn.rollback()
+        print("DB ERROR saving stats:", e)
     finally: release_db(conn)
 
     mode_title = "المحاكاة الشاملة" if quiz_type == "exam" else "التدريب"
@@ -196,6 +199,8 @@ def register_exam_handlers(bot):
                 cur.execute("""INSERT INTO saved_questions (user_id, question_id) VALUES (%s, %s) ON CONFLICT DO NOTHING""", (user_id, q_id))
                 conn.commit()
                 cur.close()
+            except Exception as e:
+                conn.rollback()
             finally: release_db(conn)
             bot.reply_to(message, "✅ **تم حفظ السؤال بنجاح في ملفاتك!**", parse_mode="Markdown")
 
@@ -207,6 +212,9 @@ def register_exam_handlers(bot):
                 cur.execute("SELECT subject, exam_session, question_text FROM questions WHERE id = %s;", (q_id,))
                 q_data = cur.fetchone()
                 cur.close()
+            except Exception as e:
+                conn.rollback()
+                q_data = None
             finally: release_db(conn)
             if q_data:
                 sub, sess, q_text = q_data
@@ -231,12 +239,10 @@ def register_exam_handlers(bot):
             ans_dict = session.setdefault("answered_dict", {})
             ans_dict[str(q_id)] = selected_letter
             
-            # إذا لم يكن السؤال الأخير، انتقل للتالي مباشرة
             if session["index"] < len(session["question_ids"]) - 1:
                 safe_answer_callback(bot, call.id, "✅ تم تسجيل الإجابة.")
                 session["index"] += 1
             else:
-                # إذا كان السؤال الأخير، اطلب من الطالب التسليم يدوياً
                 safe_answer_callback(bot, call.id, "✅ تم الحفظ. اضغط 'إنهاء وتسليم الورقة' لإنهاء الامتحان.", show_alert=True)
                 
             save_session_to_db(user_id, session)
@@ -252,6 +258,9 @@ def register_exam_handlers(bot):
             cur.execute("SELECT option_a, option_b, option_c, option_d, correct_option FROM questions WHERE id = %s;", (q_id,))
             row = cur.fetchone()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
         correct_letter = str(row[4]).strip()
