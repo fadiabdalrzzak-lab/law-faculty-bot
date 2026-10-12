@@ -1,659 +1,277 @@
 from telebot import types
-from config import YEARS, SEMESTERS, OPTION_LETTERS
-from database import get_db, release_db
+from config import OPTION_LETTERS, user_mistakes_cache, ADMIN_IDS
+from database import get_db, release_db, load_session_from_db, save_session_to_db, delete_session
 from keyboards import get_student_main_keyboard, get_exam_control_keyboard, get_real_exam_control_keyboard
-from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
-import json
+from utils import md, safe_answer_callback, is_admin
 
-def register_student_handlers(bot):
+def send_current_question(bot, chat_id, user_id, session, message_id=None):
+    quiz_type = session.get("quiz_type", "training")
+    questions, index = session.get("question_ids", []), session.get("index", 0)
+
+    if index >= len(questions):
+        if message_id:
+            try: bot.edit_message_reply_markup(chat_id, message_id, reply_markup=None)
+            except Exception: pass
+        finish_exam(bot, chat_id, user_id, session)
+        return
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE id=%s", (questions[index],))
+        q = cur.fetchone()
+        cur.close()
+    finally: release_db(conn)
+
+    if not q:
+        bot.send_message(chat_id, "❌ حدث خطأ: السؤال غير موجود.")
+        return
+
+    q_id, text, options = q[0], q[1], [q[2], q[3], q[4], q[5]]
+    markup = types.InlineKeyboardMarkup()
+    ans_dict = session.get("answered_dict", {})
+    
+    for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
+        if i < len(options) and options[i]:
+            btn_txt = f"{letter}) {md(options[i])}"
+            if quiz_type == "exam" and ans_dict.get(str(q_id)) == letter:
+                btn_txt = f"🔘 {btn_txt}"
+            markup.add(types.InlineKeyboardButton(btn_txt, callback_data=f"ans_{letter}_{q_id}"))
+
+    total = len(questions)
+    progress_count = int((index / total) * 10) if total else 0
+    progress = "▓" * progress_count + "░" * (10 - progress_count)
+
+    if quiz_type == "exam":
+        header = f"⏱️ **سؤال ({index + 1}/{total}) - {md(session.get('subject', ''))}**\n📊 {progress}\n\n"
+    else:
+        correct, wrong = session.get("correct_count", 0), session.get("wrong_count", 0)
+        header = f"❓ **سؤال ({index + 1}/{total}) - {md(session.get('subject', ''))}**\n📊 {progress} | ✅ {correct} | ❌ {wrong}\n\n"
+        if is_admin(user_id): markup.add(types.InlineKeyboardButton("⚙️ لوحة التعديل", callback_data=f"admin_menu_{q_id}"))
+
+    full_text = header + md(text)
+    if not message_id: message_id = session.get("q_msg_id")
+
+    if message_id:
+        try:
+            bot.edit_message_text(full_text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=markup)
+            return
+        except Exception: pass
+
+    msg = bot.send_message(chat_id, full_text, parse_mode="Markdown", reply_markup=markup)
+    session["q_msg_id"] = msg.message_id
+    save_session_to_db(user_id, session)
+
+def finish_exam(bot, chat_id, user_id, session):
+    bot.send_chat_action(chat_id, 'typing')
+    quiz_type = session.get("quiz_type", "training")
+    total = len(session.get("question_ids", []))
+    
+    if quiz_type == "exam":
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, correct_option FROM questions WHERE id = ANY(%s)", (session["question_ids"],))
+            correct_answers = {str(r[0]): str(r[1]).strip().lower() for r in cur.fetchall()}
+            cur.close()
+        finally: release_db(conn)
+
+        correct, wrong = 0, 0
+        wrong_ids = []
+        ans_dict = session.get("answered_dict", {})
+        
+        for q_id_val in session["question_ids"]:
+            ans = ans_dict.get(str(q_id_val), "").lower()
+            corr = correct_answers.get(str(q_id_val), "").lower()
+            if ans == corr and ans != "":
+                correct += 1
+            else:
+                wrong += 1
+                wrong_ids.append(q_id_val)
+        
+        session["correct_count"] = correct
+        session["wrong_count"] = wrong
+        session["wrong_ids"] = wrong_ids
+    else:
+        correct = session.get("correct_count", 0)
+        wrong = session.get("wrong_count", 0)
+        wrong_ids = session.get("wrong_ids", [])
+    
+    percent = round((correct / total) * 100, 1) if total > 0 else 0
+    status = "🎉 ممتاز / ناجح 🏆" if percent >= 60 else "⚠️ يرجى إعارة المادة مزيداً من الانتباه 💪"
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO quiz_results (user_id, subject, session_name, score, total, percent, quiz_type) VALUES (%s,%s,%s,%s,%s,%s,%s)""", (user_id, session.get("subject", ""), session.get("session_name", ""), correct, total, percent, quiz_type))
+        xp_gained = correct * 15 if quiz_type == "exam" else correct * 10
+        cur.execute("UPDATE users SET xp_points = xp_points + %s WHERE user_id = %s", (xp_gained, user_id))
+        conn.commit()
+        cur.close()
+    except Exception: pass
+    finally: release_db(conn)
+
+    mode_title = "المحاكاة الشاملة" if quiz_type == "exam" else "التدريب"
+    result_text = f"🏁 **انتهت {mode_title}!**\n\n📖 المادة: {md(session.get('subject', ''))}\n📊 الصحيحة: {correct}\n❌ الخاطئة: {wrong}\n💯 النسبة: **{percent}%**\n📌 التقييم: **{status}**"
+
+    delete_session(user_id)
+
+    if wrong_ids:
+        user_mistakes_cache[user_id] = {"subject": session.get("subject", ""), "session_name": session.get("session_name", ""), "q_ids": wrong_ids}
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 إعادة اختبار الأسئلة الخاطئة", callback_data="retry_mistakes"))
+        bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
+    else:
+        bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=get_student_main_keyboard())
+
+
+def register_exam_handlers(bot):
 
     @bot.message_handler(func=lambda msg: msg.text in [
-        "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
-        "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
-        "🏆 الإنجازات", "⚙️ إعدادات حسابي", "🤖 المساعد الذكي", "💬 الدعم والملاحظات"
+        "➡️ السؤال التالي", "⬅️ السؤال السابق", "🔄 إعادة الاختبار", 
+        "🏁 إنهاء وعرض النتيجة", "🏁 إنهاء وتسليم الورقة", "💾 حفظ السؤال للمراجعة", 
+        "⚠️ الإبلاغ عن خطأ", "📚 الانتقال إلى مادة أخرى", "🏠 القائمة الرئيسية"
     ])
-    def handle_student_menus(message):
+    def handle_exam_control_buttons(message):
         user_id = message.from_user.id
-        if not check_subscription(bot, user_id):
-            return send_sub_required_msg(bot, message.chat.id)
-        
         text = message.text
-        try: bot.delete_message(message.chat.id, message.message_id)
-        except Exception: pass
+        session = load_session_from_db(user_id)
 
-        if text == "🏛 تدريب الدورات المؤتمتة":
-            markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"yr_{y_num}"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "🏛 **تدريب الدورات المؤتمتة:**\nاختر السنة الدراسية للبدء:", parse_mode="Markdown", reply_markup=markup)
+        if text in ["🏠 القائمة الرئيسية", "📚 الانتقال إلى مادة أخرى"]:
+            delete_session(user_id)
+            bot.send_message(message.chat.id, "🏠 تمت العودة للرئيسية.", reply_markup=get_student_main_keyboard())
+            try: bot.delete_message(message.chat.id, message.message_id)
+            except Exception: pass
+            return
 
-        elif text == "📝 الاختبارات":
-            markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"exm_yr_{y_num}"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "⏱️ **محاكاة الاختبارات الشاملة:**\nسيتم توليد امتحان عشوائي من كافة دورات المادة.\nاختر السنة الدراسية:", parse_mode="Markdown", reply_markup=markup)
+        if not session:
+            bot.send_message(message.chat.id, "⚠️ لا يوجد اختبار نشط حالياً.", reply_markup=get_student_main_keyboard())
+            return
 
-        elif text == "📚 المكتبة":
+        if text == "➡️ السؤال التالي":
+            if session["index"] < len(session["question_ids"]) - 1:
+                session["index"] += 1
+                save_session_to_db(user_id, session)
+                send_current_question(bot, message.chat.id, user_id, session)
+            else: finish_exam(bot, message.chat.id, user_id, session)
+            try: bot.delete_message(message.chat.id, message.message_id)
+            except Exception: pass
+
+        elif text == "⬅️ السؤال السابق":
+            if session["index"] > 0:
+                session["index"] -= 1
+                save_session_to_db(user_id, session)
+                send_current_question(bot, message.chat.id, user_id, session)
+            try: bot.delete_message(message.chat.id, message.message_id)
+            except Exception: pass
+
+        elif text == "🔄 إعادة الاختبار":
+            session.update({"index": 0, "correct_count": 0, "wrong_count": 0, "answered": []})
+            if "wrong_ids" in session: del session["wrong_ids"]
+            if "answered_dict" in session: session["answered_dict"] = {}
+            save_session_to_db(user_id, session)
+            bot.send_message(message.chat.id, "🔄 **بداية جديدة! ركز جيداً.**", parse_mode="Markdown")
+            send_current_question(bot, message.chat.id, user_id, session)
+            try: bot.delete_message(message.chat.id, message.message_id)
+            except Exception: pass
+
+        elif text in ["🏁 إنهاء وعرض النتيجة", "🏁 إنهاء وتسليم الورقة"]:
+            q_msg_id = session.get("q_msg_id")
+            if q_msg_id:
+                try: bot.edit_message_reply_markup(message.chat.id, q_msg_id, reply_markup=None)
+                except Exception: pass
+            finish_exam(bot, message.chat.id, user_id, session)
+            try: bot.delete_message(message.chat.id, message.message_id)
+            except Exception: pass
+
+        elif text == "💾 حفظ السؤال للمراجعة":
+            q_id = session["question_ids"][session["index"]]
             conn = get_db()
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT DISTINCT year FROM pdf_files WHERE year IS NOT NULL ORDER BY year ASC")
-                years = [r[0] for r in cur.fetchall()]
-                cur.close()
-            finally: release_db(conn)
-            if not years:
-                bot.send_message(message.chat.id, "📑 لا توجد ملفات في المكتبة حالياً.")
-                return
-            markup = types.InlineKeyboardMarkup()
-            for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"pdfy_{y}"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "📚 **المكتبة الأكاديمية:**\nاختر السنة:", parse_mode="Markdown", reply_markup=markup)
-
-        elif text == "🧠 البطاقات التعليمية":
-            conn = get_db()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT DISTINCT year FROM flashcards ORDER BY year ASC")
-                years = [r[0] for r in cur.fetchall()]
-                cur.close()
-            finally: release_db(conn)
-            if not years:
-                bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة حالياً. ترقبها قريباً!")
-                return
-            markup = types.InlineKeyboardMarkup()
-            for y in years: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"fcy_{y}"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
-
-        elif text == "📈 تقدمي الدراسي":
-            markup = types.InlineKeyboardMarkup()
-            markup.row(types.InlineKeyboardButton("📂 محفوظاتي", callback_data="show_saved"), types.InlineKeyboardButton("📊 إحصائياتي", callback_data="show_stats"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "📈 **تقدمي الدراسي:**\nتتبع أدائك ومحفوظاتك من هنا:", parse_mode="Markdown", reply_markup=markup)
-
-        elif text == "⚙️ إعدادات حسابي":
-            markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
-            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "⚙️ **إعدادات حسابي:**\nاختر سنتك الدراسية ليتم تخصيص تحدي اليوم بناءً عليها:", parse_mode="Markdown", reply_markup=markup)
-
-        elif text == "💬 الدعم والملاحظات":
-            bot.send_message(message.chat.id, "وُلد المشروع ليختصر وقتكم 💙.\nللدعم التقني والمقترحات تواصلوا معي مباشرة:\n👉 @Saqqer10")
-
-        else:
-            bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
-
-    # ==================== التنقل في المحاكاة (الاختبار الشامل) ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_yr_"))
-    def handle_exm_year(call):
-        year_num = int(call.data.split("_")[2])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s ORDER BY semester ASC", (year_num,))
-            semesters = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"exm_sem_{year_num}_{s}"))
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        bot.edit_message_text(f"🎓 **{YEARS[year_num]}**\nاختر الفصل لمحاكاة الامتحان:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_sem_"))
-    def handle_exm_semester(call):
-        _, _, year_num, sem_num = call.data.split("_")
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
-            subjects = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for idx, (sub_name, cnt) in enumerate(subjects):
-            markup.add(types.InlineKeyboardButton(f"📖 {sub_name} (محاكاة)", callback_data=f"randex_{year_num}_{sem_num}_{idx}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"exm_yr_{year_num}"))
-        bot.edit_message_text(f"📚 **المواد:**\nاختر المادة لتوليد امتحان شامل عشوائي:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    # ==================== بدء الجلسات ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("ss_"))
-    def handle_session_selection(call):
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx, sess_idx = map(int, parts[1:5])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
-            subject_name = cur.fetchall()[sub_idx][0]
-            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
-            session_name = cur.fetchall()[sess_idx][0]
-            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s ORDER BY id ASC", (year_num, sem_num, subject_name, session_name))
-            q_ids = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-
-        user_id = call.from_user.id
-        save_session_to_db(user_id, {"question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [], "subject": subject_name, "session_name": session_name, "quiz_type": "training"})
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
-        safe_answer_callback(bot, call.id, "🚀 بدأ التدريب!")
-        bot.send_message(call.message.chat.id, f"🚀 **بدء التدريب: {md(subject_name)}**\nالأسئلة: {len(q_ids)}", parse_mode="Markdown", reply_markup=get_exam_control_keyboard())
-        
-        from handlers.exam_handler import send_current_question
-        send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("randex_"))
-    def handle_random_exam(call):
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = map(int, parts[1:4])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
-            subject_name = cur.fetchall()[sub_idx][0]
-            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY RANDOM() LIMIT 50", (year_num, sem_num, subject_name))
-            q_ids = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-
-        user_id = call.from_user.id
-        if not q_ids: return safe_answer_callback(bot, call.id, "⚠️ لا توجد أسئلة كافية.", show_alert=True)
-        
-        save_session_to_db(user_id, {"question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [], "subject": subject_name, "session_name": "محاكاة امتحان شامل", "quiz_type": "exam", "answered_dict": {}})
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
-        
-        safe_answer_callback(bot, call.id, "⏱️ بدأ الامتحان الشامل!")
-        bot.send_message(call.message.chat.id, f"⏱️ **محاكاة امتحان شامل: {md(subject_name)}**\nالأسئلة: {len(q_ids)}\nلا يوجد كشف للإجابات أو مساعدة. ركز جيداً!", parse_mode="Markdown", reply_markup=get_real_exam_control_keyboard())
-        
-        from handlers.exam_handler import send_current_question
-        send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
-
-    # ==================== الإعدادات وإحصائيات الطالب ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_y_"))
-    def handle_set_year(call):
-        year = int(call.data.split("_")[2])
-        markup = types.InlineKeyboardMarkup()
-        for s_num, s_name in SEMESTERS.items():
-            markup.add(types.InlineKeyboardButton(s_name, callback_data=f"set_s_{year}_{s_num}"))
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        bot.edit_message_text(f"🎓 **{YEARS[year]}**\nالآن اختر الفصل الدراسي الخاص بك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
-    def handle_set_sem(call):
-        _, _, year, sem = call.data.split("_")
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("UPDATE users SET academic_year=%s, academic_semester=%s WHERE user_id=%s", (int(year), int(sem), call.from_user.id))
-            conn.commit()
-            cur.close()
-        finally: release_db(conn)
-        bot.edit_message_text(f"✅ **تم ضبط إعداداتك بنجاح!**\nسنتك الدراسية: {YEARS[int(year)]} - {SEMESTERS[int(sem)]}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
-        safe_answer_callback(bot, call.id, "✅ تم تحديث بياناتك!", show_alert=True)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("dc_ans_"))
-    def handle_daily_challenge_answer(call):
-        _, _, q_id_str, selected_letter = call.data.split("_")
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT question_text, correct_option FROM questions WHERE id=%s", (int(q_id_str),))
-            row = cur.fetchone()
-            if not row: return safe_answer_callback(bot, call.id, "السؤال لم يعد موجوداً.", show_alert=True)
-            q_text, correct_letter = row[0], str(row[1]).strip()
-            if selected_letter.lower() == correct_letter.lower():
-                msg = f"🎉 **إجابة صحيحة بطل!**\nلقد كسبت 20 نقطة XP ✨\n\n❓ {md(q_text)}\n\n✅ الجواب: ({correct_letter})"
-                cur.execute("UPDATE users SET xp_points = xp_points + 20 WHERE user_id = %s", (user_id,))
+                cur.execute("""INSERT INTO saved_questions (user_id, question_id) VALUES (%s, %s) ON CONFLICT DO NOTHING""", (user_id, q_id))
                 conn.commit()
-                safe_answer_callback(bot, call.id, "إجابة صحيحة! +20 XP", show_alert=True)
-            else:
-                msg = f"❌ **إجابة خاطئة!**\nلا بأس، الخطأ يعلمنا.\n\n❓ {md(q_text)}\n\n✅ الجواب الصحيح كان: ({correct_letter})"
-                safe_answer_callback(bot, call.id, "إجابة خاطئة!", show_alert=True)
-        finally: release_db(conn)
-        try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
-        except Exception: pass
+                cur.close()
+            finally: release_db(conn)
+            bot.reply_to(message, "✅ **تم حفظ السؤال بنجاح في ملفاتك!**", parse_mode="Markdown")
 
-    @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
-    def handle_show_stats(call):
+        elif text == "⚠️ الإبلاغ عن خطأ":
+            q_id = session["question_ids"][session["index"]]
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT subject, exam_session, question_text FROM questions WHERE id = %s;", (q_id,))
+                q_data = cur.fetchone()
+                cur.close()
+            finally: release_db(conn)
+            if q_data:
+                sub, sess, q_text = q_data
+                report_msg = f"⚠️ **بلاغ عن خطأ!**\n👤 **الطالب:** `{user_id}`\n📚 **المادة:** {md(sub)} ({md(sess)})\n🔖 **رقم السؤال:** `{q_id}`\n❓ **النص:**\n{md(q_text)}"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("⚙️ لوحة التعديل", callback_data=f"admin_menu_{q_id}"))
+                for admin_id in ADMIN_IDS:
+                    try: bot.send_message(admin_id, report_msg, parse_mode="Markdown", reply_markup=markup)
+                    except Exception: pass
+                bot.reply_to(message, "📩 تم الإرسال للمراجعة. شكراً لك!")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
+    def handle_answer(call):
         user_id = call.from_user.id
-        bot.send_chat_action(call.message.chat.id, 'typing')
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*), AVG(percent) FROM quiz_results WHERE user_id=%s", (user_id,))
-            res = cur.fetchone()
-            total_quizzes, avg_percent = res if res else (0, 0)
-            cur.execute("SELECT subject, session_name, score, total, percent FROM quiz_results WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
-            recent_results = cur.fetchall()
-            cur.execute("SELECT xp_points, level FROM users WHERE user_id=%s", (user_id,))
-            user_data = cur.fetchone()
-            cur.close()
-        except Exception:
-            total_quizzes, avg_percent, recent_results, user_data = 0, 0, [], None
-        finally: release_db(conn)
-        xp, lvl = user_data[0] if user_data else 0, user_data[1] if user_data else 1
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        if not total_quizzes or total_quizzes == 0:
-            bot.edit_message_text("📊 لا توجد إحصائيات مسجلة لك بعد.", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
-            return safe_answer_callback(bot, call.id)
-        avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
-        msg = f"📈 **سجل إحصائياتك:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
-        for sub, sess, score, total, pct in recent_results: msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
-        try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        except Exception: pass
-        safe_answer_callback(bot, call.id)
+        session = load_session_from_db(user_id)
+        if not session: return safe_answer_callback(bot, call.id, "⚠️ انتهت الجلسة.", show_alert=True)
 
-    @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
-    def handle_saved_menu(call):
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("📝 الأسئلة المحفوظة", callback_data="saved_qs"),
-            types.InlineKeyboardButton("🧠 البطاقات المحفوظة", callback_data="saved_fcs"),
-            types.InlineKeyboardButton("📄 ملفات PDF المحفوظة", callback_data="saved_pdfs"),
-            types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message")
-        )
-        bot.edit_message_text("📂 **قسم المحفوظات:**\nاختر القسم:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
+        selected_letter, q_id = call.data.split("_")[1], int(call.data.split("_")[2])
+        quiz_type = session.get("quiz_type", "training")
 
-    @bot.callback_query_handler(func=lambda call: call.data == "saved_qs")
-    def handle_saved_qs(call):
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("""SELECT q.id, q.subject, q.exam_session, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option FROM questions q JOIN saved_questions s ON q.id = s.question_id WHERE s.user_id = %s""", (user_id,))
-            saved_qs = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        if not saved_qs: return safe_answer_callback(bot, call.id, "📂 ليس لديك أسئلة محفوظة.", show_alert=True)
-        bot.send_message(call.message.chat.id, f"📝 **الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
-        for q in saved_qs:
-            q_id, sub, sess, q_text, a, b, c, d, correct = q
-            marks = {"أ": a, "ب": b, "ج": c, "د": d}
-            lines = [f"{let}) {marks[let]}{' ✅' if let == correct else ''}" for let in OPTION_LETTERS]
-            msg_text = f"📌 **مادة:** {md(sub)} ({md(sess)})\n\n❓ **السؤال:** {md(q_text)}\n\n" + "\n".join(md(l) for l in lines)
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🗑️ إزالة", callback_data=f"unsave_{q_id}"))
-            bot.send_message(call.message.chat.id, msg_text, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsave_"))
-    def handle_unsave(call):
-        q_id = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM saved_questions WHERE user_id=%s AND question_id=%s", (call.from_user.id, q_id))
-            conn.commit()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
-
-    @bot.callback_query_handler(func=lambda call: call.data == "saved_pdfs")
-    def handle_saved_pdfs(call):
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT p.id, p.title FROM pdf_files p JOIN saved_pdfs s ON p.id = s.pdf_id WHERE s.user_id = %s ORDER BY p.id DESC", (user_id,))
-            pdfs = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        if not pdfs: return safe_answer_callback(bot, call.id, "📂 ليس لديك ملفات محفوظة.", show_alert=True)
-        markup = types.InlineKeyboardMarkup()
-        for pdf_id, title in pdfs:
-            markup.row(types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}"), types.InlineKeyboardButton("🗑️", callback_data=f"unsavepdf_{pdf_id}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_saved"))
-        bot.edit_message_text("📂 **ملفات PDF المحفوظة:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("savepdf_"))
-    def handle_save_pdf(call):
-        pdf_id = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO saved_pdfs (user_id, pdf_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, pdf_id))
-            conn.commit()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "✅ تم حفظ الملف في المحفوظات!", show_alert=True)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsavepdf_"))
-    def handle_unsave_pdf(call):
-        pdf_id = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM saved_pdfs WHERE user_id=%s AND pdf_id=%s", (call.from_user.id, pdf_id))
-            conn.commit()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
-        call.data = "saved_pdfs"
-        handle_saved_pdfs(call)
-
-    @bot.callback_query_handler(func=lambda call: call.data == "saved_fcs")
-    def handle_saved_fcs(call):
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
-            cards = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        if not cards: return safe_answer_callback(bot, call.id, "📂 ليس لديك بطاقات محفوظة.", show_alert=True)
-        from handlers.student_handler import send_flashcard
-        send_flashcard(bot, call.message.chat.id, user_id, cards, 0, False, call.message.message_id, "البطاقات المحفوظة")
-        safe_answer_callback(bot, call.id, "🚀 بدء مراجعة البطاقات المحفوظة!")
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("savefc_"))
-    def handle_save_fc(call):
-        card_id = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO saved_flashcards (user_id, flashcard_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, card_id))
-            conn.commit()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "✅ تم الحفظ في قسم المحفوظات!", show_alert=True)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsavefc_"))
-    def handle_unsave_fc(call):
-        parts = call.data.split("_")
-        card_id, index = int(parts[1]), int(parts[2])
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM saved_flashcards WHERE user_id=%s AND flashcard_id=%s", (user_id, card_id))
-            conn.commit()
-            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
-            cards = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة من المحفوظات.", show_alert=True)
-        if not cards:
-            try: bot.edit_message_text("📂 لا توجد بطاقات محفوظة متبقية.", chat_id=call.message.chat.id, message_id=call.message.message_id)
-            except Exception: pass
+        if quiz_type == "exam":
+            ans_dict = session.setdefault("answered_dict", {})
+            ans_dict[str(q_id)] = selected_letter
+            safe_answer_callback(bot, call.id, "✅ تم تسجيل الإجابة.")
+            if session["index"] < len(session["question_ids"]) - 1:
+                session["index"] += 1
+            save_session_to_db(user_id, session)
+            send_current_question(bot, call.message.chat.id, user_id, session, message_id=call.message.message_id)
             return
-        if index >= len(cards): index = len(cards) - 1
-        send_flashcard(bot, call.message.chat.id, user_id, cards, index, False, call.message.message_id, "البطاقات المحفوظة")
 
-    @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
-    def handle_delete_msg(call):
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
-        safe_answer_callback(bot, call.id)
+        if q_id != session["question_ids"][session["index"]]:
+            return safe_answer_callback(bot, call.id, "⚠️ أجبت مسبقاً.", show_alert=True)
 
-    # ==================== التنقل العام (مواد، دورات، مكتبة) ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
-    def handle_year_selection(call):
-        year_num = int(call.data.split("_")[1])
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s ORDER BY semester ASC", (year_num,))
-            semesters = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT option_a, option_b, option_c, option_d, correct_option FROM questions WHERE id = %s;", (q_id,))
+            row = cur.fetchone()
             cur.close()
         finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"sem_{year_num}_{s}"))
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        bot.edit_message_text(f"🎓 **{YEARS[year_num]}**\nاختر الفصل:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("sem_"))
-    def handle_semester_selection(call):
-        _, year_num, sem_num = call.data.split("_")
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
-            subjects = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for idx, (sub_name, cnt) in enumerate(subjects):
-            markup.add(types.InlineKeyboardButton(f"📖 {sub_name} ({cnt})", callback_data=f"sb_{year_num}_{sem_num}_{idx}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"yr_{year_num}"))
-        bot.edit_message_text(f"📚 **المواد:**\nاختر المادة المطلوب اختبارها:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
+        correct_letter = str(row[4]).strip()
+        if selected_letter.lower() == correct_letter.lower():
+            session["correct_count"] = session.get("correct_count", 0) + 1
+            safe_answer_callback(bot, call.id, "✅ إجابة صحيحة! (+10 XP)")
+        else:
+            session["wrong_count"] = session.get("wrong_count", 0) + 1
+            session.setdefault("wrong_ids", []).append(q_id)
+            correct_text = {"أ": row[0], "ب": row[1], "ج": row[2], "د": row[3]}.get(correct_letter, "")
+            safe_answer_callback(bot, call.id, f"❌ إجابة خاطئة!\nالصحيح ({correct_letter}): {correct_text}", show_alert=True)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("sb_"))
-    def handle_subject_selection(call):
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = int(parts[1]), int(parts[2]), int(parts[3])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
-            subjects = [r[0] for r in cur.fetchall()]
-            if sub_idx >= len(subjects): return
-            subject_name = subjects[sub_idx]
-            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
-            sessions = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for s_idx, sess in enumerate(sessions):
-            markup.add(types.InlineKeyboardButton(f"🗓️ {sess}", callback_data=f"ss_{year_num}_{sem_num}_{sub_idx}_{s_idx}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"sem_{year_num}_{sem_num}"))
-        bot.edit_message_text(f"📖 **مادة: {md(subject_name)}**\nاختر الدورة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
+        session["index"] += 1
+        save_session_to_db(user_id, session)
+        send_current_question(bot, call.message.chat.id, user_id, session, message_id=call.message.message_id)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
-    def handle_pdf_year(call):
-        year_num = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM pdf_files WHERE year=%s ORDER BY semester ASC", (year_num,))
-            semesters = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"pdfs_{year_num}_{s}"))
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        bot.edit_message_text(f"🎓 **{YEARS[year_num]}**\nاختر الفصل:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfs_"))
-    def handle_pdf_semester(call):
-        _, year_num, sem_num = call.data.split("_")
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
-            subjects = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt})", callback_data=f"pdfb_{year_num}_{sem_num}_{idx}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfy_{year_num}"))
-        bot.edit_message_text(f"📚 **{YEARS[int(year_num)]} - {SEMESTERS[int(sem_num)]}**\nاختر المادة:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfb_"))
-    def handle_pdf_subject(call):
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = map(int, parts[1:4])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT subject FROM pdf_files WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
-            subjects = [r[0] for r in cur.fetchall()]
-            if sub_idx >= len(subjects): return
-            subject_name = subjects[sub_idx]
-            cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s ORDER BY id DESC", (year_num, sem_num, subject_name))
-            pdfs = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for pdf_id, title in pdfs:
-            row = [types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}")]
-            if is_admin(call.from_user.id): row.append(types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{pdf_id}_{year_num}_{sem_num}_{sub_idx}"))
-            markup.row(*row)
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
-        bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("getpdf_"))
-    def handle_get_pdf(call):
-        pdf_id = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT title, file_id FROM pdf_files WHERE id=%s", (pdf_id,))
-            res = cur.fetchone()
-            cur.close()
-        finally: release_db(conn)
-        if res:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔖 حفظ الملف في المحفوظات", callback_data=f"savepdf_{pdf_id}"))
-            bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown", reply_markup=markup)
-            safe_answer_callback(bot, call.id, "تم الإرسال!")
-        else: safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
-
-    # ==================== البطاقات التعليمية التفاعلية ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcy_"))
-    def handle_fc_year(call):
-        year_num = int(call.data.split("_")[1])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s ORDER BY semester ASC", (year_num,))
-            semesters = [r[0] for r in cur.fetchall()]
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"fcs_{year_num}_{s}"))
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-        bot.edit_message_text(f"🧠 **{YEARS[year_num]}**\nاختر الفصل للبطاقات:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcs_"))
-    def handle_fc_semester(call):
-        _, year_num, sem_num = call.data.split("_")
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) FROM flashcards WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (int(year_num), int(sem_num)))
-            subjects = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-        for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt} بطاقة)", callback_data=f"fcb_{year_num}_{sem_num}_{idx}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"fcy_{year_num}"))
-        bot.edit_message_text(f"🧠 **اختر المادة للمراجعة السريعة:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcb_"))
-    def handle_fc_start(call):
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = map(int, parts[1:4])
+    @bot.callback_query_handler(func=lambda call: call.data == "retry_mistakes")
+    def handle_retry_mistakes(call):
         user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT subject FROM flashcards WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
-            subjects = [r[0] for r in cur.fetchall()]
-            if sub_idx >= len(subjects): return
-            subject_name = subjects[sub_idx]
-            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
-            cards = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        if not cards: return safe_answer_callback(bot, call.id, "لا توجد بطاقات.", show_alert=True)
-        send_flashcard(bot, call.message.chat.id, user_id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
-        safe_answer_callback(bot, call.id, "🚀 بدأت المراجعة!")
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcact_"))
-    def handle_fc_action(call):
-        parts = call.data.split("_")
-        idx = int(parts[1])
-        show_back = int(parts[2]) == 1
-        subject_name = "_".join(parts[3:])
-        user_id = call.from_user.id
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            if subject_name == "البطاقات المحفوظة":
-                cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
-            else:
-                cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
-            cards = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
-        send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
-        safe_answer_callback(bot, call.id)
-
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("fcdel_"))
-    def handle_fc_delete(call):
-        if not is_admin(call.from_user.id): 
-            return safe_answer_callback(bot, call.id, "⚠️ مخصص للمشرف فقط.", show_alert=True)
-        parts = call.data.split("_")
-        card_id, index = int(parts[1]), int(parts[2])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM flashcards WHERE id=%s", (card_id,))
-            res = cur.fetchone()
-            if not res: return safe_answer_callback(bot, call.id, "❌ البطاقة غير موجودة أصلاً.", show_alert=True)
-            subject_name = res[0]
-            cur.execute("DELETE FROM flashcards WHERE id=%s", (card_id,))
-            conn.commit()
-            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
-            cards = cur.fetchall()
-            cur.close()
-        finally: release_db(conn)
-        safe_answer_callback(bot, call.id, "✅ تم حذف البطاقة بنجاح!", show_alert=True)
-        if not cards:
-            try: bot.edit_message_text("🗑️ تم حذف جميع البطاقات الخاصة بهذه المادة.", chat_id=call.message.chat.id, message_id=call.message.message_id)
-            except Exception: pass
+        mistakes_data = user_mistakes_cache.get(user_id)
+        if not mistakes_data:
+            safe_answer_callback(bot, call.id, "⚠️ لا توجد أخطاء مسجلة.", show_alert=True)
             return
-        if index >= len(cards): index = len(cards) - 1
-        send_flashcard(bot, call.message.chat.id, call.from_user.id, cards, index, False, call.message.message_id, subject_name)
-
-def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, subject):
-    total = len(cards)
-    card = cards[index]
-    text = f"🧠 **مراجعة: {md(subject)}** ({index + 1}/{total})\n\n"
-    if not show_back:
-        text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
-    else:
-        text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    if not show_back:
-        markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
-    else:
-        markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
-    nav = []
-    if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
-    if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
-    if nav: markup.row(*nav)
-    if subject == "البطاقات المحفوظة":
-        markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsavefc_{card[0]}_{index}"))
-    else:
-        markup.add(types.InlineKeyboardButton("🔖 حفظ البطاقة للمراجعة", callback_data=f"savefc_{card[0]}"))
-    if is_admin(user_id) and subject != "البطاقات المحفوظة":
-        markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة (للأدمن)", callback_data=f"fcdel_{card[0]}_{index}"))
-    markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
-    if message_id:
-        try: bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
+        save_session_to_db(user_id, {
+            "question_ids": mistakes_data["q_ids"], "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [],
+            "subject": mistakes_data["subject"], "session_name": mistakes_data["session_name"] + " (تثبيت الأخطاء)",
+            "quiz_type": "training"
+        })
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
         except Exception: pass
-    else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id, "🚀 بدأ اختبار الأخطاء!")
+        bot.send_message(call.message.chat.id, "🚀 **بدء اختبار تصحيح الأخطاء!**\nنحن نثق بقدرتك على تجاوزها 💪", parse_mode="Markdown", reply_markup=get_exam_control_keyboard())
+        send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
