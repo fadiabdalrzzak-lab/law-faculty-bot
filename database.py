@@ -20,7 +20,6 @@ def init_db():
     try:
         cur = conn.cursor()
         
-        # تمت إضافة حقول السنة والفصل الدراسي هنا
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -59,10 +58,12 @@ def init_db():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS quiz_results (
                 id SERIAL PRIMARY KEY, user_id BIGINT, subject TEXT, session_name TEXT,
-                score INTEGER, total INTEGER, percent REAL, quiz_type TEXT DEFAULT 'دورة_كاملة',
+                score INTEGER, total INTEGER, percent REAL, quiz_type TEXT DEFAULT 'training',
                 taken_at TIMESTAMP DEFAULT NOW()
             );
         """)
+        # هذا هو السطر الذي سيقوم بإصلاح وحل مشكلة عدم حفظ الاختبارات!
+        cur.execute("ALTER TABLE quiz_results ADD COLUMN IF NOT EXISTS quiz_type TEXT DEFAULT 'training';")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS flashcards (
