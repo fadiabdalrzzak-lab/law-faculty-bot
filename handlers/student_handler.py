@@ -223,6 +223,7 @@ def register_student_handlers(bot):
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
         except Exception: pass
 
+        # ==================== الإحصائيات والمحفوظات الشاملة الذكية ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
     def handle_show_stats(call):
         user_id = call.from_user.id
@@ -230,29 +231,92 @@ def register_student_handlers(bot):
         conn = get_db()
         try:
             cur = conn.cursor()
+            # جلب الإحصائيات العامة
             cur.execute("SELECT COUNT(*), AVG(percent) FROM quiz_results WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
-            total_quizzes, avg_percent = res if res else (0, 0)
-            cur.execute("SELECT subject, session_name, score, total, percent FROM quiz_results WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
-            recent_results = cur.fetchall()
+            total_quizzes, avg_percent = res if res and res[0] else (0, 0)
+            
             cur.execute("SELECT xp_points, level FROM users WHERE user_id=%s", (user_id,))
             user_data = cur.fetchone()
+            xp, lvl = user_data if user_data else (0, 1)
+
+            # تحليل مستوى الطالب في كل مادة
+            cur.execute("SELECT subject, AVG(percent) FROM quiz_results WHERE user_id=%s GROUP BY subject", (user_id,))
+            subject_stats = cur.fetchall()
             cur.close()
         except Exception:
-            total_quizzes, avg_percent, recent_results, user_data = 0, 0, [], None
+            total_quizzes, avg_percent, subject_stats, xp, lvl = 0, 0, [], 0, 1
         finally: release_db(conn)
-        xp, lvl = user_data[0] if user_data else 0, user_data[1] if user_data else 1
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+
         if not total_quizzes or total_quizzes == 0:
-            bot.edit_message_text("📊 لا توجد إحصائيات مسجلة لك بعد.", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+            bot.edit_message_text("📊 لا توجد إحصائيات مسجلة لك بعد. قم بإجراء أول تدريب لك لتبدأ المنصة بتحليل مستواك!", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
             return safe_answer_callback(bot, call.id)
+
         avg_str = f"{round(avg_percent, 1)}%" if avg_percent else "0%"
-        msg = f"📈 **سجل إحصائياتك:**\n\n🏆 المستوى: **{lvl}**\n✨ النقاط (XP): **{xp}**\n🔢 الاختبارات: **{total_quizzes}**\n💯 المتوسط: **{avg_str}**\n\n🕒 **آخر 5 اختبارات:**\n"
-        for sub, sess, score, total, pct in recent_results: msg += f"• **{md(sub)}** ({md(sess)}): {score}/{total} (**{pct}%**)\n"
+        msg = f"📈 **تحليل الأداء الذكي:**\n\n🏆 المستوى: **{lvl}** | ✨ النقاط (XP): **{xp}**\n🔢 إجمالي الاختبارات: **{total_quizzes}**\n💯 المتوسط العام: **{avg_str}**\n\n📊 **مؤشر الجاهزية للمواد:**\n"
+
+        weak_subjects = []
+        for sub, sub_avg in subject_stats:
+            sub_avg = round(sub_avg, 1) if sub_avg else 0
+            progress_count = int((sub_avg / 100) * 10)
+            progress = "▓" * progress_count + "░" * (10 - progress_count)
+            
+            if sub_avg < 60:
+                status = "⚠️ نقطة ضعف"
+                weak_subjects.append(sub)
+            elif sub_avg < 80:
+                status = "👍 جيد"
+            else:
+                status = "🌟 ممتاز"
+
+            msg += f"📘 **{md(sub)}**: {sub_avg}%\n   {progress} ({status})\n\n"
+
+        # إضافة زر (تدرب الآن) للمواد الضعيفة
+        for w_sub in weak_subjects:
+            markup.add(types.InlineKeyboardButton(f"🏋️ تدرب الآن: {w_sub}", callback_data=f"trainow_{w_sub}"))
+
+        # أزرار قادمة للتشويق
+        markup.add(types.InlineKeyboardButton("🔥 شعلة المواظبة (قريباً)", callback_data="ignore"))
+        markup.add(types.InlineKeyboardButton("🏆 ترتيب الدفعة (قريباً)", callback_data="ignore"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception: pass
         safe_answer_callback(bot, call.id)
+
+    # معالجة زر (تدرب الآن) للمواد الضعيفة
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("trainow_"))
+    def handle_train_now(call):
+        subject_name = call.data.split("_", 1)[1]
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            # استخراج معلومات المادة لتوجيه الطالب لدوراتها
+            cur.execute("SELECT year, semester FROM questions WHERE subject=%s LIMIT 1", (subject_name,))
+            res = cur.fetchone()
+            if not res: return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
+            year_num, sem_num = res
+
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            all_subs = [r[0] for r in cur.fetchall()]
+            sub_idx = all_subs.index(subject_name) if subject_name in all_subs else 0
+
+            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
+            sessions = [r[0] for r in cur.fetchall()]
+            cur.close()
+        finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for s_idx, sess in enumerate(sessions):
+            markup.add(types.InlineKeyboardButton(f"🗓️ {sess}", callback_data=f"ss_{year_num}_{sem_num}_{sub_idx}_{s_idx}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع للإحصائيات", callback_data="show_stats"))
+
+        bot.edit_message_text(f"🏋️ **تدريب مكثف (معالجة الضعف):**\n📖 المادة: **{md(subject_name)}**\nاختر الدورة للبدء بتقوية نقطة ضعفك ورفع نسبتك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
 
     @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
     def handle_saved_menu(call):
