@@ -1,6 +1,5 @@
 from telebot import types
 from config import YEARS, SEMESTERS, OPTION_LETTERS
-# تم إضافة دوال حفظ وتحميل الجلسة هنا لإصلاح المشكلة الجوهرية
 from database import get_db, release_db, save_session_to_db, load_session_from_db
 from keyboards import get_student_main_keyboard, get_exam_control_keyboard, get_real_exam_control_keyboard
 from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
@@ -43,6 +42,9 @@ def register_student_handlers(bot):
                 cur.execute("SELECT DISTINCT year FROM pdf_files WHERE year IS NOT NULL ORDER BY year ASC")
                 years = [r[0] for r in cur.fetchall() if r[0] is not None]
                 cur.close()
+            except Exception as e:
+                conn.rollback()
+                years = []
             finally: release_db(conn)
             if not years:
                 bot.send_message(message.chat.id, "📑 لا توجد ملفات في المكتبة حالياً.")
@@ -61,6 +63,9 @@ def register_student_handlers(bot):
                 cur.execute("SELECT DISTINCT year FROM flashcards WHERE year IS NOT NULL ORDER BY year ASC")
                 years = [r[0] for r in cur.fetchall() if r[0] is not None]
                 cur.close()
+            except Exception as e:
+                conn.rollback()
+                years = []
             finally: release_db(conn)
             if not years:
                 bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة حالياً. ترقبها قريباً!")
@@ -101,6 +106,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            semesters = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for s in semesters: 
@@ -122,6 +130,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
             subjects = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            subjects = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for idx, (sub_name, cnt) in enumerate(subjects):
@@ -151,6 +162,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s ORDER BY id ASC", (year_num, sem_num, subject_name, session_name))
             q_ids = [r[0] for r in cur.fetchall()]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
         user_id = call.from_user.id
@@ -178,6 +192,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY RANDOM() LIMIT 50", (year_num, sem_num, subject_name))
             q_ids = [r[0] for r in cur.fetchall()]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
         user_id = call.from_user.id
@@ -216,6 +233,8 @@ def register_student_handlers(bot):
             cur.execute("UPDATE users SET academic_year=%s, academic_semester=%s WHERE user_id=%s", (year, sem, call.from_user.id))
             conn.commit()
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
         
         y_name = YEARS.get(year, f"السنة {year}")
@@ -242,6 +261,9 @@ def register_student_handlers(bot):
             else:
                 msg = f"❌ **إجابة خاطئة!**\nلا بأس، الخطأ يعلمنا.\n\n❓ {md(q_text)}\n\n✅ الجواب الصحيح كان: ({correct_letter})"
                 safe_answer_callback(bot, call.id, "إجابة خاطئة!", show_alert=True)
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
         except Exception: pass
@@ -265,7 +287,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT subject, AVG(percent) FROM quiz_results WHERE user_id=%s GROUP BY subject", (user_id,))
             subject_stats = cur.fetchall()
             cur.close()
-        except Exception:
+        except Exception as e:
+            conn.rollback()
+            print("DB ERROR in show_stats:", e)
             total_quizzes, avg_percent, subject_stats, xp, lvl = 0, 0, [], 0, 1
         finally: release_db(conn)
 
@@ -287,13 +311,14 @@ def register_student_handlers(bot):
             
             if sub_avg < 60:
                 status = "⚠️ نقطة ضعف"
-                weak_subjects.append(sub)
+                if sub: weak_subjects.append(sub)
             elif sub_avg < 80:
                 status = "👍 جيد"
             else:
                 status = "🌟 ممتاز"
 
-            msg += f"📘 **{md(sub)}**: {sub_avg}%\n   {progress} ({status})\n\n"
+            safe_sub = md(sub) if sub else "مادة غير معروفة"
+            msg += f"📘 **{safe_sub}**: {sub_avg}%\n   {progress} ({status})\n\n"
 
         for w_sub in weak_subjects:
             markup.add(types.InlineKeyboardButton(f"🏋️ تدرب الآن: {w_sub}", callback_data=f"trainow_{w_sub}"))
@@ -324,6 +349,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
             sessions = [r[0] for r in cur.fetchall()]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
         markup = types.InlineKeyboardMarkup()
@@ -355,6 +383,9 @@ def register_student_handlers(bot):
             cur.execute("""SELECT q.id, q.subject, q.exam_session, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option FROM questions q JOIN saved_questions s ON q.id = s.question_id WHERE s.user_id = %s""", (user_id,))
             saved_qs = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            saved_qs = []
         finally: release_db(conn)
         if not saved_qs: return safe_answer_callback(bot, call.id, "📂 ليس لديك أسئلة محفوظة.", show_alert=True)
         bot.send_message(call.message.chat.id, f"📝 **الأسئلة المحفوظة ({len(saved_qs)}):**", parse_mode="Markdown")
@@ -377,6 +408,8 @@ def register_student_handlers(bot):
             cur.execute("DELETE FROM saved_questions WHERE user_id=%s AND question_id=%s", (call.from_user.id, q_id))
             conn.commit()
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -391,6 +424,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT p.id, p.title FROM pdf_files p JOIN saved_pdfs s ON p.id = s.pdf_id WHERE s.user_id = %s ORDER BY p.id DESC", (user_id,))
             pdfs = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            pdfs = []
         finally: release_db(conn)
         if not pdfs: return safe_answer_callback(bot, call.id, "📂 ليس لديك ملفات محفوظة.", show_alert=True)
         markup = types.InlineKeyboardMarkup()
@@ -409,6 +445,8 @@ def register_student_handlers(bot):
             cur.execute("INSERT INTO saved_pdfs (user_id, pdf_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, pdf_id))
             conn.commit()
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "✅ تم حفظ الملف في المحفوظات!", show_alert=True)
 
@@ -421,6 +459,8 @@ def register_student_handlers(bot):
             cur.execute("DELETE FROM saved_pdfs WHERE user_id=%s AND pdf_id=%s", (call.from_user.id, pdf_id))
             conn.commit()
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
         call.data = "saved_pdfs"
@@ -435,6 +475,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
             cards = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            cards = []
         finally: release_db(conn)
         if not cards: return safe_answer_callback(bot, call.id, "📂 ليس لديك بطاقات محفوظة.", show_alert=True)
         from handlers.student_handler import send_flashcard
@@ -450,6 +493,8 @@ def register_student_handlers(bot):
             cur.execute("INSERT INTO saved_flashcards (user_id, flashcard_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, card_id))
             conn.commit()
             cur.close()
+        except Exception as e:
+            conn.rollback()
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "✅ تم الحفظ في قسم المحفوظات!", show_alert=True)
 
@@ -466,6 +511,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
             cards = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            cards = []
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة من المحفوظات.", show_alert=True)
         if not cards:
@@ -491,6 +539,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            semesters = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for s in semesters: 
@@ -512,6 +563,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
             subjects = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            subjects = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for idx, (sub_name, cnt) in enumerate(subjects):
@@ -535,6 +589,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
             sessions = [r[0] for r in cur.fetchall()]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في قاعدة البيانات", show_alert=True)
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for s_idx, sess in enumerate(sessions):
@@ -552,6 +609,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT DISTINCT semester FROM pdf_files WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            semesters = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for s in semesters: 
@@ -573,6 +633,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
             subjects = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            subjects = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt})", callback_data=f"pdfb_{year_num}_{sem_num}_{idx}"))
@@ -598,6 +661,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s ORDER BY id DESC", (year_num, sem_num, subject_name))
             pdfs = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في قاعدة البيانات", show_alert=True)
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for pdf_id, title in pdfs:
@@ -617,6 +683,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT title, file_id FROM pdf_files WHERE id=%s", (pdf_id,))
             res = cur.fetchone()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            res = None
         finally: release_db(conn)
         if res:
             markup = types.InlineKeyboardMarkup()
@@ -635,6 +704,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            semesters = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for s in semesters: 
@@ -656,6 +728,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT subject, COUNT(*) FROM flashcards WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
             subjects = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            subjects = []
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
         for idx, (sub, cnt) in enumerate(subjects): markup.add(types.InlineKeyboardButton(f"📖 {sub} ({cnt} بطاقة)", callback_data=f"fcb_{year_num}_{sem_num}_{idx}"))
@@ -679,6 +754,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
             cards = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في قاعدة البيانات", show_alert=True)
         finally: release_db(conn)
         if not cards: return safe_answer_callback(bot, call.id, "لا توجد بطاقات.", show_alert=True)
         send_flashcard(bot, call.message.chat.id, user_id, cards, 0, show_back=False, message_id=call.message.message_id, subject=subject_name)
@@ -700,6 +778,9 @@ def register_student_handlers(bot):
                 cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
             cards = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            cards = []
         finally: release_db(conn)
         if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
         send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
@@ -723,6 +804,9 @@ def register_student_handlers(bot):
             cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
             cards = cur.fetchall()
             cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "✅ تم حذف البطاقة بنجاح!", show_alert=True)
         if not cards:
