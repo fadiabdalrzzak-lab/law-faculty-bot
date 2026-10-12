@@ -56,7 +56,11 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
         try:
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=markup)
             return
-        except Exception: pass
+        except Exception as e:
+            # حظر التكرار: إذا كانت الرسالة متطابقة، تجاهل التحديث ولا ترسل رسالة جديدة
+            if "not modified" in str(e).lower():
+                return
+            # في حال وجود أخطاء أخرى كمسح الرسالة، سيستمر الكود ويرسلها من جديد
 
     msg = bot.send_message(chat_id, full_text, parse_mode="Markdown", reply_markup=markup)
     session["q_msg_id"] = msg.message_id
@@ -226,9 +230,15 @@ def register_exam_handlers(bot):
         if quiz_type == "exam":
             ans_dict = session.setdefault("answered_dict", {})
             ans_dict[str(q_id)] = selected_letter
-            safe_answer_callback(bot, call.id, "✅ تم تسجيل الإجابة.")
+            
+            # إذا لم يكن السؤال الأخير، انتقل للتالي مباشرة
             if session["index"] < len(session["question_ids"]) - 1:
+                safe_answer_callback(bot, call.id, "✅ تم تسجيل الإجابة.")
                 session["index"] += 1
+            else:
+                # إذا كان السؤال الأخير، اطلب من الطالب التسليم يدوياً
+                safe_answer_callback(bot, call.id, "✅ تم الحفظ. اضغط 'إنهاء وتسليم الورقة' لإنهاء الامتحان.", show_alert=True)
+                
             save_session_to_db(user_id, session)
             send_current_question(bot, call.message.chat.id, user_id, session, message_id=call.message.message_id)
             return
