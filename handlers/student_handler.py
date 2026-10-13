@@ -666,10 +666,15 @@ def register_student_handlers(bot):
             return safe_answer_callback(bot, call.id, "❌ خطأ في قاعدة البيانات", show_alert=True)
         finally: release_db(conn)
         markup = types.InlineKeyboardMarkup()
-        for pdf_id, title in pdfs:
-            row = [types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}")]
-            if is_admin(call.from_user.id): row.append(types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{pdf_id}_{year_num}_{sem_num}_{sub_idx}"))
+                for pdf_id, title in pdfs:
+            row = [
+                types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}"),
+                types.InlineKeyboardButton("🔖 حفظ", callback_data=f"savepdf_{pdf_id}")
+            ]
+            if is_admin(call.from_user.id): 
+                row.append(types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{pdf_id}_{year_num}_{sem_num}_{sub_idx}"))
             markup.row(*row)
+
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
         bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
