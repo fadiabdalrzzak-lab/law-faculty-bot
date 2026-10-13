@@ -692,12 +692,15 @@ def register_student_handlers(bot):
             conn.rollback()
             res = None
         finally: release_db(conn)
-        if res:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔖 حفظ الملف في المحفوظات", callback_data=f"savepdf_{pdf_id}"))
-            bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown", reply_markup=markup)
-            safe_answer_callback(bot, call.id, "تم الإرسال!")
-        else: safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
+                if res:
+            safe_answer_callback(bot, call.id, "جاري إرسال الملف، انتظر قليلاً...")
+            try:
+                bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown")
+            except Exception as e:
+                bot.send_message(call.message.chat.id, "❌ عذراً، يبدو أن هذا الملف معطوب أو تم حذفه من سيرفر تيليجرام. يرجى إبلاغ المشرف.")
+        else: 
+            safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
+
 
     # ==================== البطاقات التعليمية التفاعلية ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcy_"))
