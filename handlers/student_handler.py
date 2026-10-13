@@ -268,7 +268,7 @@ def register_student_handlers(bot):
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
         except Exception: pass
 
-    # ==================== الإحصائيات والمحفوظات الشاملة الذكية ====================
+        # ==================== الإحصائيات والمحفوظات الشاملة الذكية ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
     def handle_show_stats(call):
         user_id = call.from_user.id
@@ -289,7 +289,6 @@ def register_student_handlers(bot):
             cur.close()
         except Exception as e:
             conn.rollback()
-            print("DB ERROR in show_stats:", e)
             total_quizzes, avg_percent, subject_stats, xp, lvl = 0, 0, [], 0, 1
         finally: release_db(conn)
 
@@ -323,13 +322,83 @@ def register_student_handlers(bot):
         for w_sub in weak_subjects:
             markup.add(types.InlineKeyboardButton(f"🏋️ تدرب الآن: {w_sub}", callback_data=f"trainow_{w_sub}"))
 
-        markup.add(types.InlineKeyboardButton("🔥 شعلة المواظبة (قريباً)", callback_data="ignore"))
-        markup.add(types.InlineKeyboardButton("🏆 ترتيب الدفعة (قريباً)", callback_data="ignore"))
+        markup.add(types.InlineKeyboardButton("🔥 شعلة المواظبة", callback_data="show_streak"))
+        markup.add(types.InlineKeyboardButton("🏆 ترتيب الدفعة", callback_data="show_leaderboard"))
         markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
 
         try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         except Exception: pass
         safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "show_streak")
+    def handle_streak(call):
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT current_streak FROM users WHERE user_id=%s", (user_id,))
+            res = cur.fetchone()
+            streak = res[0] if res and res[0] else 0
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            streak = 0
+        finally: release_db(conn)
+
+        msg = f"🔥 **شعلة المواظبة (Study Streak)**\n\nأيام الدراسة المتتالية: **{streak} يوم**\n\n"
+        if streak == 0:
+            msg += "ابدأ اليوم بإجراء أول اختبار أو تدريب لإشعال حماسك!"
+        elif streak < 3:
+            msg += "بداية ممتازة! استمر في حل الأسئلة يومياً لزيادة شعلتك."
+        else:
+            msg += "أنت بطل! 🔥 استمر ولا تكسر هذه السلسلة الرائعة."
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_stats"))
+        bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
+    def handle_leaderboard(call):
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
+            res = cur.fetchone()
+            year = res[0] if res and res[0] else 0
+
+            cur.execute("SELECT first_name, xp_points FROM users WHERE academic_year=%s AND xp_points > 0 ORDER BY xp_points DESC LIMIT 10", (year,))
+            top_users = cur.fetchall()
+
+            cur.execute("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY xp_points DESC) as rank FROM users WHERE academic_year=%s AND xp_points > 0) as ranked WHERE user_id=%s", (year, user_id))
+            rank_res = cur.fetchone()
+            user_rank = rank_res[0] if rank_res else "غير محدد"
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            top_users, year, user_rank = [], 0, "غير محدد"
+        finally: release_db(conn)
+
+        from config import YEARS
+        y_name = YEARS.get(year, f"السنة {year}") if year else "دفعتك"
+        
+        msg = f"🏆 **لوحة الشرف - {y_name}**\n\n"
+        if not top_users:
+            msg += "لا توجد نقاط مسجلة في هذه الدفعة بعد. كن الأول!"
+        else:
+            medals = ["🥇", "🥈", "🥉"]
+            for i, (name, xp) in enumerate(top_users):
+                medal = medals[i] if i < 3 else f"{i+1}."
+                msg += f"{medal} **{md(name or 'طالب')}**: {xp} XP\n"
+
+        msg += f"\n🎯 ترتيبك الحالي: **{user_rank}**"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_stats"))
+        bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("trainow_"))
     def handle_train_now(call):
