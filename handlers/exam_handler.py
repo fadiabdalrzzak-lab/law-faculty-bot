@@ -109,8 +109,21 @@ def finish_exam(bot, chat_id, user_id, session):
         cur = conn.cursor()
         cur.execute("""INSERT INTO quiz_results (user_id, subject, session_name, score, total, percent, quiz_type) VALUES (%s,%s,%s,%s,%s,%s,%s)""", (user_id, session.get("subject", ""), session.get("session_name", ""), correct, total, percent, quiz_type))
         xp_gained = correct * 15 if quiz_type == "exam" else correct * 10
-        # تحديث ذكي: إضافة المستخدم للسجل إجبارياً في حال لم يكن موجوداً لضمان حفظ نقاطه
-        cur.execute("INSERT INTO users (user_id, xp_points) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET xp_points = users.xp_points + EXCLUDED.xp_points", (user_id, xp_gained))
+        
+        # التحديث الذكي: حساب شعلة المواظبة بناءً على تاريخ آخر تفاعل
+        cur.execute("""
+            INSERT INTO users (user_id, xp_points, current_streak, last_active_date)
+            VALUES (%s, %s, 1, CURRENT_DATE)
+            ON CONFLICT (user_id) DO UPDATE SET
+                xp_points = users.xp_points + EXCLUDED.xp_points,
+                current_streak = CASE
+                    WHEN users.last_active_date = CURRENT_DATE THEN users.current_streak
+                    WHEN users.last_active_date = CURRENT_DATE - INTERVAL '1 day' THEN users.current_streak + 1
+                    ELSE 1
+                END,
+                last_active_date = CURRENT_DATE
+        """, (user_id, xp_gained))
+        
         conn.commit()
         cur.close()
     except Exception as e:
@@ -130,6 +143,7 @@ def finish_exam(bot, chat_id, user_id, session):
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
     else:
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=get_student_main_keyboard())
+
 
 
 def register_exam_handlers(bot):
