@@ -358,7 +358,7 @@ def register_student_handlers(bot):
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
+        @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
     def handle_leaderboard(call):
         user_id = call.from_user.id
         conn = get_db()
@@ -367,6 +367,12 @@ def register_student_handlers(bot):
             cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
             year = res[0] if res and res[0] else 0
+
+            # التعديل الجذري: منع الطالب من رؤية الترتيب إن لم يحدد سنته
+            if year == 0:
+                cur.close()
+                release_db(conn)
+                return safe_answer_callback(bot, call.id, "⚠️ يرجى تحديد سنتك الدراسية من (⚙️ إعدادات حسابي) أولاً لتتمكن من المنافسة!", show_alert=True)
 
             cur.execute("SELECT first_name, xp_points FROM users WHERE academic_year=%s AND xp_points > 0 ORDER BY xp_points DESC LIMIT 10", (year,))
             top_users = cur.fetchall()
@@ -381,7 +387,7 @@ def register_student_handlers(bot):
         finally: release_db(conn)
 
         from config import YEARS
-        y_name = YEARS.get(year, f"السنة {year}") if year else "دفعتك"
+        y_name = YEARS.get(year, f"السنة {year}")
         
         msg = f"🏆 **لوحة الشرف - {y_name}**\n\n"
         if not top_users:
@@ -398,6 +404,7 @@ def register_student_handlers(bot):
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_stats"))
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
+
 
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("trainow_"))
