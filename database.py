@@ -13,7 +13,6 @@ def get_db(): return db_pool.getconn()
 
 def release_db(conn):
     try: 
-        # هذا السطر السحري يمنع تجميد قاعدة البيانات للأبد
         conn.rollback() 
         db_pool.putconn(conn)
     except Exception: pass
@@ -30,6 +29,8 @@ def init_db():
                 xp_points INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
                 academic_year INTEGER DEFAULT 0,
                 academic_semester INTEGER DEFAULT 0,
+                current_streak INTEGER DEFAULT 0,
+                last_active_date DATE,
                 join_date TIMESTAMP DEFAULT NOW()
             );
         """)
@@ -37,6 +38,8 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_semester INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_streak INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_date DATE;")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS questions (
