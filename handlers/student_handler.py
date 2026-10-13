@@ -665,8 +665,8 @@ def register_student_handlers(bot):
             conn.rollback()
             return safe_answer_callback(bot, call.id, "❌ خطأ في قاعدة البيانات", show_alert=True)
         finally: release_db(conn)
-        markup = types.InlineKeyboardMarkup()
-                for pdf_id, title in pdfs:
+        markup = types.InlineKeyboardMarkup() 
+        for pdf_id, title in pdfs:
             row = [
                 types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}"),
                 types.InlineKeyboardButton("🔖 حفظ", callback_data=f"savepdf_{pdf_id}")
