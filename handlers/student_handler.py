@@ -692,7 +692,7 @@ def register_student_handlers(bot):
             conn.rollback()
             res = None
         finally: release_db(conn)
-                if res:
+        if res:
             safe_answer_callback(bot, call.id, "جاري إرسال الملف، انتظر قليلاً...")
             try:
                 bot.send_document(call.message.chat.id, res[1], caption=f"📄 **{md(res[0])}**", parse_mode="Markdown")
