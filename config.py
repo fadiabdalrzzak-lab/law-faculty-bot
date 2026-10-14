@@ -31,3 +31,6 @@ OPTION_MAP = {"A": "أ", "B": "ب", "C": "ج", "D": "د", "أ": "أ", "ب": "ب"
 admin_states = {}
 user_mistakes_cache = {}
 user_search_cache = {}
+
+import os
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
