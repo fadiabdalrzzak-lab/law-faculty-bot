@@ -77,8 +77,10 @@ def register_ai_handlers(bot):
                 # لتفادي أخطاء الماركدوان من ردود Gemini
                 bot.send_message(call.message.chat.id, msg_text, reply_markup=markup)
 
-        except Exception as e:
+                except Exception as e:
+            print(f"Gemini API Error: {e}") # هذا السطر لكشف الخطأ في سيرفر Render
             bot.send_message(call.message.chat.id, "⚠️ عذراً، المستشار الذكي يواجه ضغطاً حالياً. يرجى المحاولة بعد قليل.")
+
 
     @bot.callback_query_handler(func=lambda call: call.data == "exit_ai_chat")
     def handle_exit_ai(call):
