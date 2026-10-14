@@ -15,6 +15,7 @@ from utils import check_subscription, send_sub_required_msg, is_admin, safe_answ
 from handlers.student_handler import register_student_handlers
 from handlers.exam_handler import register_exam_handlers
 from handlers.admin_handler import register_admin_handlers
+from handlers.ai_handler import register_ai_handlers
 
 # ==================== تهيئة البوت والخادم ====================
 bot = telebot.TeleBot(BOT_TOKEN)
