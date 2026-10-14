@@ -31,7 +31,7 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
     markup = types.InlineKeyboardMarkup()
     ans_dict = session.get("answered_dict", {})
     
-        for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
+    for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
         if i < len(options) and options[i]:
             btn_txt = f"{letter}) {md(options[i])}"
             if quiz_type == "exam" and ans_dict.get(str(q_id)) == letter:
