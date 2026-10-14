@@ -57,6 +57,7 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=markup)
             return
         except Exception as e:
+            # حماية البوت من التجمد إذا تم الضغط على نفس الإجابة (حل مشكلة تكرار السؤال)
             if "not modified" in str(e).lower():
                 return
 
@@ -104,13 +105,14 @@ def finish_exam(bot, chat_id, user_id, session):
     percent = round((correct / total) * 100, 1) if total > 0 else 0
     status = "🎉 ممتاز / ناجح 🏆" if percent >= 60 else "⚠️ يرجى إعارة المادة مزيداً من الانتباه 💪"
 
+    new_achievements = []
+    
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute("""INSERT INTO quiz_results (user_id, subject, session_name, score, total, percent, quiz_type) VALUES (%s,%s,%s,%s,%s,%s,%s)""", (user_id, session.get("subject", ""), session.get("session_name", ""), correct, total, percent, quiz_type))
         xp_gained = correct * 15 if quiz_type == "exam" else correct * 10
         
-        # التحديث الذكي: حساب شعلة المواظبة بناءً على تاريخ آخر تفاعل
         cur.execute("""
             INSERT INTO users (user_id, xp_points, current_streak, last_active_date)
             VALUES (%s, %s, 1, CURRENT_DATE)
@@ -124,12 +126,51 @@ def finish_exam(bot, chat_id, user_id, session):
                 last_active_date = CURRENT_DATE
         """, (user_id, xp_gained))
         
+        # --- خوارزمية اكتشاف الأوسمة الـ 10 اللحظية ---
+        cur.execute("SELECT xp_points, current_streak FROM users WHERE user_id=%s", (user_id,))
+        user_data = cur.fetchone()
+        current_xp, current_streak = user_data if user_data else (0, 0)
+
+        cur.execute("SELECT COUNT(*), SUM(CASE WHEN percent = 100 THEN 1 ELSE 0 END) FROM quiz_results WHERE user_id=%s", (user_id,))
+        test_stats = cur.fetchone()
+        total_tests = test_stats[0] if test_stats and test_stats[0] else 0
+        perfect_scores = test_stats[1] if test_stats and test_stats[1] else 0
+
+        cur.execute("SELECT achievement_name FROM achievements WHERE user_id=%s", (user_id,))
+        earned_achievements = [r[0] for r in cur.fetchall()]
+
+        badges = {
+            "محامٍ متدرب": {"icon": "🥉", "condition": total_tests >= 5},
+            "باحث قانوني": {"icon": "🥈", "condition": total_tests >= 15},
+            "مستشار قانوني": {"icon": "💼", "condition": total_tests >= 30},
+            "موسوعة تشريعية": {"icon": "📚", "condition": total_tests >= 50},
+            "فقيه قانوني": {"icon": "🥇", "condition": current_xp >= 1000},
+            "قاضي القضاة": {"icon": "🏛️", "condition": current_xp >= 5000},
+            "رئيس محكمة النقض": {"icon": "👑", "condition": current_xp >= 10000},
+            "حجة قانونية": {"icon": "⚖️", "condition": perfect_scores >= 1},
+            "صائغ الدستور": {"icon": "🖋️", "condition": perfect_scores >= 5},
+            "مشرّع مثابر": {"icon": "📜", "condition": current_streak >= 3}
+        }
+
+        for badge_name, badge_info in badges.items():
+            if badge_info["condition"] and badge_name not in earned_achievements:
+                new_achievements.append((badge_name, badge_info["icon"]))
+                cur.execute("INSERT INTO achievements (user_id, achievement_name) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, badge_name))
+
         conn.commit()
         cur.close()
     except Exception as e:
         conn.rollback()
-        print("DB ERROR saving stats:", e)
+        print("DB ERROR saving stats/badges:", e)
     finally: release_db(conn)
+
+    # --- إرسال التهنئة اللحظية إذا حصل على وسام جديد ---
+    if new_achievements:
+        celebration_msg = "🎉 **إنجاز جديد يضاف لمسيرتك!** 🎉\n\nلقد أثبتّ جدارتك وحصلت للتو على:\n\n"
+        for name, icon in new_achievements:
+            celebration_msg += f" {icon} **{name}**\n"
+        celebration_msg += "\nتفقّد خزانة أوسمتك الكاملة من القائمة الرئيسية 🏆"
+        bot.send_message(chat_id, celebration_msg, parse_mode="Markdown")
 
     mode_title = "المحاكاة الشاملة" if quiz_type == "exam" else "التدريب"
     result_text = f"🏁 **انتهت {mode_title}!**\n\n📖 المادة: {md(session.get('subject', ''))}\n📊 الصحيحة: {correct}\n❌ الخاطئة: {wrong}\n💯 النسبة: **{percent}%**\n📌 التقييم: **{status}**"
@@ -143,7 +184,6 @@ def finish_exam(bot, chat_id, user_id, session):
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
     else:
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=get_student_main_keyboard())
-
 
 
 def register_exam_handlers(bot):
