@@ -65,6 +65,7 @@ def handle_check_sub(call):
 register_admin_handlers(bot)
 register_student_handlers(bot)
 register_exam_handlers(bot)
+register_ai_handlers(bot)
 
 # ==================== محرك تحدي اليوم الآلي ====================
 def send_daily_challenges():
