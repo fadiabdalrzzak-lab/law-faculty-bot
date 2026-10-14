@@ -31,12 +31,19 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
     markup = types.InlineKeyboardMarkup()
     ans_dict = session.get("answered_dict", {})
     
-    for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
+        for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
         if i < len(options) and options[i]:
             btn_txt = f"{letter}) {md(options[i])}"
             if quiz_type == "exam" and ans_dict.get(str(q_id)) == letter:
                 btn_txt = f"🔘 {btn_txt}"
             markup.add(types.InlineKeyboardButton(btn_txt, callback_data=f"ans_{letter}_{q_id}"))
+
+    # إضافة زر المستشار الذكي أسفل الخيارات في وضع التدريب فقط
+    if quiz_type == "training":
+        markup.add(types.InlineKeyboardButton("💡 التكييف القانوني (AI)", callback_data=f"ai_explain_{q_id}"))
+
+    total = len(questions)
+
 
     total = len(questions)
     progress_count = int((index / total) * 10) if total else 0
