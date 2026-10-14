@@ -241,6 +241,33 @@ def register_student_handlers(bot):
         bot.send_message(call.message.chat.id, "🏠 **حسابك جاهز الآن!**\nاستخدم القائمة السفلية للبدء في التدريب والمنافسة:", reply_markup=get_student_main_keyboard(), parse_mode="Markdown")
         safe_answer_callback(bot, call.id, "✅ تم تحديث بياناتك!", show_alert=True)
 
+    # هذا هو القسم الذي سقط سهواً (تحدي اليوم)!
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dc_ans_"))
+    def handle_daily_challenge_answer(call):
+        _, _, q_id_str, selected_letter = call.data.split("_")
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT question_text, correct_option FROM questions WHERE id=%s", (int(q_id_str),))
+            row = cur.fetchone()
+            if not row: return safe_answer_callback(bot, call.id, "السؤال لم يعد موجوداً.", show_alert=True)
+            q_text, correct_letter = row[0], str(row[1]).strip()
+            if selected_letter.lower() == correct_letter.lower():
+                msg = f"🎉 **إجابة صحيحة بطل!**\nلقد كسبت 20 نقطة XP ✨\n\n❓ {md(q_text)}\n\n✅ الجواب: ({correct_letter})"
+                cur.execute("UPDATE users SET xp_points = xp_points + 20 WHERE user_id = %s", (user_id,))
+                conn.commit()
+                safe_answer_callback(bot, call.id, "إجابة صحيحة! +20 XP", show_alert=True)
+            else:
+                msg = f"❌ **إجابة خاطئة!**\nلا بأس، الخطأ يعلمنا.\n\n❓ {md(q_text)}\n\n✅ الجواب الصحيح كان: ({correct_letter})"
+                safe_answer_callback(bot, call.id, "إجابة خاطئة!", show_alert=True)
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
+        finally: release_db(conn)
+        try: bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+        except Exception: pass
+
     # ==================== الإحصائيات والمحفوظات الشاملة الذكية ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_stats")
     def handle_show_stats(call):
@@ -907,4 +934,109 @@ def register_student_handlers(bot):
             subject_name = res[0]
             cur.execute("DELETE FROM flashcards WHERE id=%s", (card_id,))
             conn.commit()
-            cur.execute("SELECT id, front_text, back_text FROM flashcards 
+            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
+            cards = cur.fetchall()
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "✅ تم حذف البطاقة بنجاح!", show_alert=True)
+        if not cards:
+            try: bot.edit_message_text("🗑️ تم حذف جميع البطاقات الخاصة بهذه المادة.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception: pass
+            return
+        if index >= len(cards): index = len(cards) - 1
+        send_flashcard(bot, call.message.chat.id, call.from_user.id, cards, index, False, call.message.message_id, subject_name)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "saved_fcs")
+    def handle_saved_fcs(call):
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
+            cards = cur.fetchall()
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            cards = []
+        finally: release_db(conn)
+        if not cards: return safe_answer_callback(bot, call.id, "📂 ليس لديك بطاقات محفوظة.", show_alert=True)
+        from handlers.student_handler import send_flashcard
+        send_flashcard(bot, call.message.chat.id, user_id, cards, 0, False, call.message.message_id, "البطاقات المحفوظة")
+        safe_answer_callback(bot, call.id, "🚀 بدء مراجعة البطاقات المحفوظة!")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("savefc_"))
+    def handle_save_fc(call):
+        card_id = int(call.data.split("_")[1])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("INSERT INTO saved_flashcards (user_id, flashcard_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (call.from_user.id, card_id))
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "✅ تم الحفظ في قسم المحفوظات!", show_alert=True)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("unsavefc_"))
+    def handle_unsave_fc(call):
+        parts = call.data.split("_")
+        card_id, index = int(parts[1]), int(parts[2])
+        user_id = call.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM saved_flashcards WHERE user_id=%s AND flashcard_id=%s", (user_id, card_id))
+            conn.commit()
+            cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
+            cards = cur.fetchall()
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            cards = []
+        finally: release_db(conn)
+        safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة من المحفوظات.", show_alert=True)
+        if not cards:
+            try: bot.edit_message_text("📂 لا توجد بطاقات محفوظة متبقية.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception: pass
+            return
+        if index >= len(cards): index = len(cards) - 1
+        send_flashcard(bot, call.message.chat.id, user_id, cards, index, False, call.message.message_id, "البطاقات المحفوظة")
+
+    @bot.callback_query_handler(func=lambda call: call.data == "delete_this_message")
+    def handle_delete_msg(call):
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
+        safe_answer_callback(bot, call.id)
+
+def send_flashcard(bot, chat_id, user_id, cards, index, show_back, message_id, subject):
+    total = len(cards)
+    card = cards[index]
+    text = f"🧠 **مراجعة: {md(subject)}** ({index + 1}/{total})\n\n"
+    if not show_back:
+        text += f"❓ **المصطلح / السؤال:**\n{md(card[1])}"
+    else:
+        text += f"✅ **التعريف / الجواب:**\n{md(card[2])}"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if not show_back:
+        markup.add(types.InlineKeyboardButton("🔄 تقليب البطاقة", callback_data=f"fcact_{index}_1_{subject}"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔙 العودة للوجه الأول", callback_data=f"fcact_{index}_0_{subject}"))
+    nav = []
+    if index > 0: nav.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"fcact_{index-1}_0_{subject}"))
+    if index < total - 1: nav.append(types.InlineKeyboardButton("التالي ➡️", callback_data=f"fcact_{index+1}_0_{subject}"))
+    if nav: markup.row(*nav)
+    if subject == "البطاقات المحفوظة":
+        markup.add(types.InlineKeyboardButton("🗑️ إزالة من المحفوظات", callback_data=f"unsavefc_{card[0]}_{index}"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔖 حفظ البطاقة للمراجعة", callback_data=f"savefc_{card[0]}"))
+    if is_admin(user_id) and subject != "البطاقات المحفوظة":
+        markup.add(types.InlineKeyboardButton("🗑️ حذف هذه البطاقة (للأدمن)", callback_data=f"fcdel_{card[0]}_{index}"))
+    markup.add(types.InlineKeyboardButton("🏠 خروج من المراجعة", callback_data="delete_this_message"))
+    if message_id:
+        try: bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
+        except Exception: pass
+    else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
