@@ -114,25 +114,32 @@ def start_bot_and_db():
         print("🔄 جاري الاتصال بقاعدة البيانات...")
         init_pool()
         init_db()
-        
+
         bot.set_my_commands([
             telebot.types.BotCommand("start", "🚀 بدء أو إعادة تشغيل المنصة")
         ])
-        
+
         # تشغيل المجدول الزمني (يعمل يومياً الساعة 10 صباحاً بتوقيت دمشق)
         scheduler = BackgroundScheduler(timezone="Asia/Damascus")
         scheduler.add_job(send_daily_challenges, 'cron', hour=10, minute=0)
         scheduler.start()
-        
+
         print("✅ قاعدة البيانات جاهزة. جاري تشغيل البوت...")
-        bot_thread = threading.Thread(target=lambda: bot.infinity_polling(skip_pending=True), daemon=True)
+        
+        def run_polling():
+            import time
+            time.sleep(3)  # انتظار 3 ثوانٍ لإغلاق النسخة القديمة على Render وتجنب خطأ 409
+            while True:
+                try:
+                    bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=10)
+                except Exception as err:
+                    print(f"⚠️ خطأ في الاتصال، إعادة المحاولة خلال 5 ثوانٍ: {err}")
+                    time.sleep(5)
+
+        bot_thread = threading.Thread(target=run_polling, daemon=True)
         bot_thread.start()
         print("🚀 البوت يعمل الآن بنجاح!")
     except Exception as e:
         print(f"❌ خطأ أثناء بدء التشغيل: {e}")
 
 start_bot_and_db()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
