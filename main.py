@@ -1,4 +1,4 @@
-import os
+0import os
 import time
 import threading
 from flask import Flask
@@ -143,3 +143,9 @@ def start_bot_and_db():
         print(f"❌ خطأ أثناء بدء التشغيل: {e}")
 
 start_bot_and_db()
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
