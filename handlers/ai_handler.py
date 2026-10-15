@@ -35,7 +35,8 @@ def register_ai_handlers(bot):
             cur.close()
         except Exception:
             q = None
-        finally: release_db(conn)
+        finally:
+            release_db(conn)
 
         if not q:
             return bot.answer_callback_query(call.id, "❌ لم يتم العثور على السؤال.", show_alert=True)
@@ -46,7 +47,6 @@ def register_ai_handlers(bot):
         q_text, a, b, c, d, correct = q
         correct_full = {"أ": a, "ب": b, "ج": c, "د": d}.get(correct.strip(), "")
 
-        # صياغة السؤال الموجه للذكاء الاصطناعي في الخلفية
         prompt = f"""
         الرجاء شرح هذا السؤال الامتحاني المؤتمت:
         النص: {q_text}
@@ -64,7 +64,6 @@ def register_ai_handlers(bot):
         try:
             chat = model.start_chat(history=[])
             response = chat.send_message(prompt)
-            # تسجيل الطالب في وضع النقاش الذكي
             active_ai_sessions[user_id] = chat
 
             markup = types.InlineKeyboardMarkup()
@@ -74,25 +73,25 @@ def register_ai_handlers(bot):
             try:
                 bot.send_message(call.message.chat.id, msg_text, parse_mode="Markdown", reply_markup=markup)
             except Exception:
-                # لتفادي أخطاء الماركدوان من ردود Gemini
                 bot.send_message(call.message.chat.id, msg_text, reply_markup=markup)
 
-            except Exception as e:
-                print(f"Gemini API Error: {e}") # هذا السطر لكشف الخطأ في سيرفر Render
-                bot.send_message(call.message.chat.id, "⚠️ عذراً، المستشار الذكي يواجه ضغطاً حالياً. يرجى المحاولة بعد قليل.")
-
+        except Exception as e:
+            print(f"Gemini API Error: {e}")
+            # إرسال تفاصيل الخطأ التقني مباشرة في تيليجرام لمعرفة السبب الدقيق فوراً
+            bot.send_message(call.message.chat.id, f"⚠️ **حدث خطأ أثناء الاتصال بالمستشار الذكي:**\n`{str(e)}`", parse_mode="Markdown")
 
     @bot.callback_query_handler(func=lambda call: call.data == "exit_ai_chat")
     def handle_exit_ai(call):
         user_id = call.from_user.id
         if user_id in active_ai_sessions:
             del active_ai_sessions[user_id]
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
         bot.send_message(call.message.chat.id, "🔙 **تم إنهاء النقاش القانوني.**\nيمكنك الآن متابعة التدريب من رسالة الاختبار بالأعلى 👆", parse_mode="Markdown")
         bot.answer_callback_query(call.id, "تمت العودة للتدريب")
 
-    # التقاط رسائل الطالب أثناء النقاش وتمريرها لـ Gemini
     @bot.message_handler(func=lambda msg: msg.from_user.id in active_ai_sessions and msg.text not in [
         "➡️ السؤال التالي", "⬅️ السؤال السابق", "🔄 إعادة الاختبار", 
         "🏁 إنهاء وعرض النتيجة", "🏁 إنهاء وتسليم الورقة", "💾 حفظ السؤال للمراجعة", 
@@ -115,4 +114,5 @@ def register_ai_handlers(bot):
             except Exception:
                 bot.reply_to(message, response.text, reply_markup=markup)
         except Exception as e:
-            bot.reply_to(message, "⚠️ حدث خطأ أثناء الاتصال بالمستشار الذكي. حاول مجدداً.")
+            print(f"Gemini Chat Error: {e}")
+            bot.reply_to(message, f"⚠️ **خطأ تقني:**\n`{str(e)}`", parse_mode="Markdown")
