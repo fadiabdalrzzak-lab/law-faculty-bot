@@ -11,10 +11,23 @@ SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ في القانون ال
 تجنب تماماً أي إشارة لقوانين دول أخرى (كالمصري أو الفرنسي) ما لم يكن السؤال صراحة عن القانون المقارن. 
 كن أكاديمياً، دقيقاً، واستخدم لغة قانونية رصينة، مع تبسيط العلة التشريعية للطالب لتسهيل الفهم وليس الحفظ فقط."""
 
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=SYRIAN_LAW_PROMPT
-)
+# دالة ذكية لاختيار أحدث نموذج متاح تلقائياً لمنع خطأ 404 مستقبلاً
+def get_working_model():
+    preferred_models = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-pro"
+    ]
+    for model_name in preferred_models:
+        try:
+            return genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=SYRIAN_LAW_PROMPT
+            )
+        except Exception:
+            continue
+    return genai.GenerativeModel("gemini-2.5-flash")
 
 # قاموس لحفظ جلسات النقاش النشطة للطلاب
 active_ai_sessions = {}
@@ -62,8 +75,24 @@ def register_ai_handlers(bot):
         """
 
         try:
-            chat = model.start_chat(history=[])
-            response = chat.send_message(prompt)
+            # محاولة الاتصال بالنموذج الأحدث، وفي حال رفضه يتم جلب أول نموذج متاح في الحساب تلقائياً
+            try:
+                model = genai.GenerativeModel(model_name="gemini-2.5-flash", system_instruction=SYRIAN_LAW_PROMPT)
+                chat = model.start_chat(history=[])
+                response = chat.send_message(prompt)
+            except Exception:
+                available_models = [
+                    m.name for m in genai.list_models() 
+                    if 'generateContent' in m.supported_generation_methods
+                ]
+                if not available_models:
+                    raise Exception("لا توجد نماذج متاحة لهذا المفتاح.")
+                # اختيار أول نموذج متاح من قائمة جوجل الرسمية
+                fallback_model_name = available_models[0]
+                model = genai.GenerativeModel(model_name=fallback_model_name)
+                chat = model.start_chat(history=[])
+                response = chat.send_message(SYRIAN_LAW_PROMPT + "\n\n" + prompt)
+
             active_ai_sessions[user_id] = chat
 
             markup = types.InlineKeyboardMarkup()
@@ -77,7 +106,6 @@ def register_ai_handlers(bot):
 
         except Exception as e:
             print(f"Gemini API Error: {e}")
-            # إرسال تفاصيل الخطأ التقني مباشرة في تيليجرام لمعرفة السبب الدقيق فوراً
             bot.send_message(call.message.chat.id, f"⚠️ **حدث خطأ أثناء الاتصال بالمستشار الذكي:**\n`{str(e)}`", parse_mode="Markdown")
 
     @bot.callback_query_handler(func=lambda call: call.data == "exit_ai_chat")
