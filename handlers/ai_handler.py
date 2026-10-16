@@ -15,7 +15,7 @@ SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القا
 active_ai_sessions = {}
 
 def ask_gemini(user_id, user_text, reset_session=False):
-    """دالة الاتصال الآمن والمستقر مع النماذج المعتمدة حصراً"""
+    """دالة اتصال فائقة السرعة ومباشرة بالنموذج الأسرع دون حلقات انتظار"""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     if reset_session or user_id not in active_ai_sessions:
@@ -28,14 +28,29 @@ def ask_gemini(user_id, user_text, reset_session=False):
         )
     )
 
-    # النماذج المستقرة والمعتمدة فقط لتجنب أخطاء 404
-    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-1.5-flash"]
-    last_error = None
-
-    for model_name in models_to_try:
+    # الاتصال المباشر والفوري بالنموذج الأسرع والأكثر استقراراً
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=active_ai_sessions[user_id],
+            config=types.GenerateContentConfig(
+                system_instruction=SYRIAN_LAW_PROMPT,
+                temperature=0.3 # تقليل العشوائية لزيادة سرعة التفكير ودقة القوانين
+            )
+        )
+        reply_text = response.text
+        active_ai_sessions[user_id].append(
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=reply_text)]
+            )
+        )
+        return reply_text
+    except Exception as e:
+        # محاولة احتياطية ثانية سريعة جداً بالاسم الافتراضي العام في حال الطوارئ
         try:
             response = client.models.generate_content(
-                model=model_name,
+                model="gemini-flash-latest",
                 contents=active_ai_sessions[user_id],
                 config=types.GenerateContentConfig(
                     system_instruction=SYRIAN_LAW_PROMPT
@@ -49,13 +64,10 @@ def ask_gemini(user_id, user_text, reset_session=False):
                 )
             )
             return reply_text
-        except Exception as e:
-            last_error = e
-            continue
-
-    if active_ai_sessions.get(user_id):
-        active_ai_sessions[user_id].pop()
-    raise last_error if last_error else Exception("تعذر الاتصال بنماذج Gemini المتاحة.")
+        except Exception as inner_e:
+            if active_ai_sessions.get(user_id):
+                active_ai_sessions[user_id].pop()
+            raise inner_e
 
 def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
     """دالة لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
@@ -138,19 +150,12 @@ def register_ai_handlers(bot):
 
         prompt = f"""
         المادة الدراسية: {sub}
-        الرجاء شرح هذا السؤال الامتحاني المؤتمت بدقة واختصار مناسب:
+        اشرح هذا السؤال الامتحاني باختصار شديد ومركز:
         النص: {q_text}
-        الخيارات:
-        أ) {a}
-        ب) {b}
-        ج) {c}
-        د) {d}
+        الخيارات: أ) {a} | ب) {b} | ج) {c} | د) {d}
+        الإجابة الصحيحة: ({correct_clean}) {correct_full}
         
-        الإجابة الصحيحة المعتمدة في السلم الامتحاني هي: ({correct_clean}) {correct_full}
-        
-        اشرح لي باختصار ووضوح:
-        1. لماذا تعتبر هذه الإجابة هي الصحيحة وفقاً للقانون السوري؟
-        2. لماذا تعتبر الخيارات الأخرى غير دقيقة أو خاطئة؟
+        بيّن باختصار شديد العلة القانونية السورية للإجابة الصحيحة ولماذا أخطأت بقية الخيارات.
         """
 
         try:
@@ -159,7 +164,7 @@ def register_ai_handlers(bot):
             markup = tg_types.InlineKeyboardMarkup()
             markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
             
-            full_msg = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الآن الرد على هذه الرسالة لطرح أي سؤال إضافي حول هذه القاعدة القانونية.*"
+            full_msg = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الرد على هذه الرسالة لطرح أي سؤال إضافي.*"
             send_long_response(bot, call.message.chat.id, full_msg, reply_markup=markup)
 
         except Exception as e:
