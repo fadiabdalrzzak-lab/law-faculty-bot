@@ -29,7 +29,9 @@ def ask_gemini(user_id, user_text, reset_session=False):
     )
 
     # الاعتماد حصرياً على النماذج الاحترافية القوية لحسابات الـ Pro
-    pro_models = ["gemini-1.5-flash", "gemini-2.5-flash"]
+        # الاعتماد على نماذج السرعة الفائقة ذات الحد المجاني الضخم (1500 طلب يومياً)
+    pro_models = ["gemini-1.5-flash", "gemini-1.5-flash-8b"]
+
 
     last_error = None
 
