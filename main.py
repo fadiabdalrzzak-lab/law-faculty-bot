@@ -6,7 +6,8 @@ from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # استدعاء إعدادات البوت وقاعدة البيانات
-from config import bot
+from config import BOT_TOKEN
+bot = telebot.TeleBot(BOT_TOKEN)
 from database import init_pool, init_db, get_db, release_db
 from utils import md
 
