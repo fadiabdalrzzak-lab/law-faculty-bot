@@ -15,13 +15,12 @@ SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القا
 active_ai_sessions = {}
 
 def ask_gemini(user_id, user_text, reset_session=False):
-    """دالة الاتصال بالحزمة الجديدة google-genai مع حفظ سياق النقاش"""
+    """دالة الاتصال بالحزمة الجديدة مع استخدام gemini-3.8-flash حصراً"""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     if reset_session or user_id not in active_ai_sessions:
         active_ai_sessions[user_id] = []
 
-    # إضافة رسالة الطالب إلى سجل المحادثة
     active_ai_sessions[user_id].append(
         types.Content(
             role="user",
@@ -29,8 +28,8 @@ def ask_gemini(user_id, user_text, reset_session=False):
         )
     )
 
-    # قائمة النماذج المعتمدة في التوثيق الجديد بالترتيب
-    models_to_try = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.0-flash"]
+    # الاعتماد على النموذج الموصى به رسمياً من جوجل
+    models_to_try = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.8-pro"]
     last_error = None
 
     for model_name in models_to_try:
@@ -43,7 +42,6 @@ def ask_gemini(user_id, user_text, reset_session=False):
                 )
             )
             reply_text = response.text
-            # حفظ رد المستشار في السجل لمتابعة النقاش
             active_ai_sessions[user_id].append(
                 types.Content(
                     role="model",
@@ -55,10 +53,29 @@ def ask_gemini(user_id, user_text, reset_session=False):
             last_error = e
             continue
 
-    # في حال فشل الإرسال نحذف آخر رسالة معلقة ونرفع الخطأ
     if active_ai_sessions.get(user_id):
         active_ai_sessions[user_id].pop()
     raise last_error if last_error else Exception("تعذر الاتصال بنماذج Gemini.")
+
+def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
+    """دالة ذكية لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
+    if not text:
+        return
+    max_len = 4000
+    parts = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+    for idx, part in enumerate(parts):
+        markup = reply_markup if idx == len(parts) - 1 else None
+        try:
+            if reply_to and idx == 0:
+                bot.reply_to(reply_to, part, parse_mode="Markdown", reply_markup=markup)
+            else:
+                bot.send_message(chat_id, part, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            # محاولة الإرسال بدون Markdown في حال وجود رموز خاصة غير مدعومة
+            if reply_to and idx == 0:
+                bot.reply_to(reply_to, part, reply_markup=markup)
+            else:
+                bot.send_message(chat_id, part, reply_markup=markup)
 
 
 def register_ai_handlers(bot):
@@ -122,7 +139,7 @@ def register_ai_handlers(bot):
 
         prompt = f"""
         المادة الدراسية: {sub}
-        الرجاء شرح هذا السؤال الامتحاني المؤتمت:
+        الرجاء شرح هذا السؤال الامتحاني المؤتمت بدقة واختصار مناسب:
         النص: {q_text}
         الخيارات:
         أ) {a}
@@ -143,11 +160,8 @@ def register_ai_handlers(bot):
             markup = tg_types.InlineKeyboardMarkup()
             markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
             
-            msg_text = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الآن الرد على هذه الرسالة لطرح أي سؤال إضافي حول هذه القاعدة القانونية.*"
-            try:
-                bot.send_message(call.message.chat.id, msg_text, parse_mode="Markdown", reply_markup=markup)
-            except Exception:
-                bot.send_message(call.message.chat.id, msg_text, reply_markup=markup)
+            full_msg = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الآن الرد على هذه الرسالة لطرح أي سؤال إضافي حول هذه القاعدة القانونية.*"
+            send_long_response(bot, call.message.chat.id, full_msg, reply_markup=markup)
 
         except Exception as e:
             print(f"Gemini API Error: {e}")
@@ -184,10 +198,7 @@ def register_ai_handlers(bot):
             reply_text = ask_gemini(user_id, message.text, reset_session=False)
             markup = tg_types.InlineKeyboardMarkup()
             markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش", callback_data="exit_ai_chat"))
-            try:
-                bot.reply_to(message, reply_text, parse_mode="Markdown", reply_markup=markup)
-            except Exception:
-                bot.reply_to(message, reply_text, reply_markup=markup)
+            send_long_response(bot, message.chat.id, reply_text, reply_markup=markup, reply_to=message)
         except Exception as e:
             print(f"Gemini Chat Error: {e}")
             bot.reply_to(message, f"⚠️ **خطأ تقني أثناء الرد:**\n`{str(e)}`", parse_mode="Markdown")
