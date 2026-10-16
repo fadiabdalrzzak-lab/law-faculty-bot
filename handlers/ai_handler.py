@@ -29,7 +29,8 @@ def ask_gemini(user_id, user_text, reset_session=False):
     )
 
     # الاعتماد حصرياً على النماذج الاحترافية القوية لحسابات الـ Pro
-    pro_models = ["gemini-1.5-pro", "gemini-pro"]
+        pro_models = ["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.8-flash"]
+
     last_error = None
 
     for model_name in pro_models:
