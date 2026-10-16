@@ -15,7 +15,7 @@ SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القا
 active_ai_sessions = {}
 
 def ask_gemini(user_id, user_text, reset_session=False):
-    """دالة الاتصال بالحزمة الجديدة مع استخدام gemini-3.8-flash حصراً"""
+    """دالة الاتصال الآمن والمستقر مع النماذج المعتمدة حصراً"""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     if reset_session or user_id not in active_ai_sessions:
@@ -28,8 +28,8 @@ def ask_gemini(user_id, user_text, reset_session=False):
         )
     )
 
-    # الاعتماد على النموذج الموصى به رسمياً من جوجل
-    models_to_try = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.8-pro"]
+    # النماذج المستقرة والمعتمدة فقط لتجنب أخطاء 404
+    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-1.5-flash"]
     last_error = None
 
     for model_name in models_to_try:
@@ -55,10 +55,10 @@ def ask_gemini(user_id, user_text, reset_session=False):
 
     if active_ai_sessions.get(user_id):
         active_ai_sessions[user_id].pop()
-    raise last_error if last_error else Exception("تعذر الاتصال بنماذج Gemini.")
+    raise last_error if last_error else Exception("تعذر الاتصال بنماذج Gemini المتاحة.")
 
 def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
-    """دالة ذكية لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
+    """دالة لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
     if not text:
         return
     max_len = 4000
@@ -71,7 +71,6 @@ def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
             else:
                 bot.send_message(chat_id, part, parse_mode="Markdown", reply_markup=markup)
         except Exception:
-            # محاولة الإرسال بدون Markdown في حال وجود رموز خاصة غير مدعومة
             if reply_to and idx == 0:
                 bot.reply_to(reply_to, part, reply_markup=markup)
             else:
