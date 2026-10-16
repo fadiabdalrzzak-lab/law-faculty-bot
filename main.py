@@ -5,11 +5,13 @@ import telebot
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# استدعاء إعدادات البوت وقاعدة البيانات
+# استدعاء التوكن وإعدادات قاعدة البيانات
 from config import BOT_TOKEN
-bot = telebot.TeleBot(BOT_TOKEN)
 from database import init_pool, init_db, get_db, release_db
 from utils import md
+
+# تهيئة كائن البوت الأساسي
+bot = telebot.TeleBot(BOT_TOKEN)
 
 # استدعاء ملفات التحكم (Handlers)
 from handlers.student_handler import register_student_handlers
@@ -42,12 +44,10 @@ def send_daily_challenges():
     conn = get_db()
     try:
         cur = conn.cursor()
-        # جلب السنوات والفصول التي اختارها الطلاب في الإعدادات
         cur.execute("SELECT DISTINCT academic_year, academic_semester FROM users")
         groups = cur.fetchall()
         
         for year, sem in groups:
-            # اختيار سؤال عشوائي واحد لهذه السنة والفصل
             cur.execute("SELECT id, subject, question_text, option_a, option_b, option_c, option_d FROM questions WHERE academic_year=%s AND academic_semester=%s ORDER BY RANDOM() LIMIT 1", (year, sem))
             q = cur.fetchone()
             if not q: 
@@ -56,21 +56,19 @@ def send_daily_challenges():
             q_id, sub, text, opt_a, opt_b, opt_c, opt_d = q
             options = [opt_a, opt_b, opt_c, opt_d]
             
-            # تصميم رسالة التحدي
             msg_text = f"🎯 **تحدي اليوم!** ركز جيداً، الإجابة الصحيحة تمنحك 20 نقطة 🌟\n\n📚 {md(sub)}\n\n❓ {md(text)}"
             markup = telebot.types.InlineKeyboardMarkup()
             for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
                 if i < len(options) and options[i]:
                     markup.add(telebot.types.InlineKeyboardButton(f"{letter}) {md(options[i])}", callback_data=f"challenge_{letter}_{q_id}"))
             
-            # إرسال السؤال لطلاب هذه الدفعة فقط
             cur.execute("SELECT user_id FROM users WHERE academic_year=%s AND academic_semester=%s", (year, sem))
             students = cur.fetchall()
             
             for (u_id,) in students:
                 try:
                     bot.send_message(u_id, msg_text, parse_mode="Markdown", reply_markup=markup)
-                    time.sleep(0.05) # تأخير بسيط لتجنب حظر تيليجرام للإرسال الجماعي
+                    time.sleep(0.05)
                 except Exception: 
                     pass
         cur.close()
@@ -98,9 +96,8 @@ def start_bot_and_db():
 
         print("✅ قاعدة البيانات جاهزة. جاري تشغيل البوت...")
         
-        # حلقة التشغيل المعزولة لمنع تضارب الاتصال 409
         def run_polling():
-            time.sleep(3)  # انتظار 3 ثواني لإغلاق النسخة القديمة على Render
+            time.sleep(3)  # انتظار 3 ثوانٍ لإغلاق النسخة القديمة على Render
             while True:
                 try:
                     bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=10)
@@ -114,9 +111,7 @@ def start_bot_and_db():
     except Exception as e:
         print(f"❌ خطأ أثناء بدء التشغيل: {e}")
 
-# ==========================================
-# التشغيل الأساسي (بدون أي مسافات بادئة)
-# ==========================================
+# التشغيل الأساسي
 start_bot_and_db()
 
 if __name__ == "__main__":
