@@ -41,11 +41,12 @@ def send_daily_challenges():
     conn = get_db()
     try:
         cur = conn.cursor()
-        # جلب السنوات والفصول المتاحة
+        # جلب السنوات والفصول التي اختارها الطلاب في الإعدادات
         cur.execute("SELECT DISTINCT academic_year, academic_semester FROM users")
         groups = cur.fetchall()
         
         for year, sem in groups:
+            # اختيار سؤال عشوائي واحد لهذه السنة والفصل
             cur.execute("SELECT id, subject, question_text, option_a, option_b, option_c, option_d FROM questions WHERE academic_year=%s AND academic_semester=%s ORDER BY RANDOM() LIMIT 1", (year, sem))
             q = cur.fetchone()
             if not q: 
@@ -54,20 +55,21 @@ def send_daily_challenges():
             q_id, sub, text, opt_a, opt_b, opt_c, opt_d = q
             options = [opt_a, opt_b, opt_c, opt_d]
             
+            # تصميم رسالة التحدي
             msg_text = f"🎯 **تحدي اليوم!** ركز جيداً، الإجابة الصحيحة تمنحك 20 نقطة 🌟\n\n📚 {md(sub)}\n\n❓ {md(text)}"
             markup = telebot.types.InlineKeyboardMarkup()
             for i, letter in enumerate(['أ', 'ب', 'ج', 'د']):
                 if i < len(options) and options[i]:
                     markup.add(telebot.types.InlineKeyboardButton(f"{letter}) {md(options[i])}", callback_data=f"challenge_{letter}_{q_id}"))
             
-            # إرسال التحدي للطلاب المطابقين
+            # إرسال السؤال لطلاب هذه الدفعة فقط
             cur.execute("SELECT user_id FROM users WHERE academic_year=%s AND academic_semester=%s", (year, sem))
             students = cur.fetchall()
             
             for (u_id,) in students:
                 try:
                     bot.send_message(u_id, msg_text, parse_mode="Markdown", reply_markup=markup)
-                    time.sleep(0.05) # منع حظر تيليجرام
+                    time.sleep(0.05) # تأخير بسيط لتجنب حظر تيليجرام للإرسال الجماعي
                 except Exception: 
                     pass
         cur.close()
@@ -88,16 +90,16 @@ def start_bot_and_db():
             telebot.types.BotCommand("start", "🚀 بدء أو إعادة تشغيل المنصة")
         ])
 
-        # تشغيل المجدول الزمني بتوقيت دمشق
+        # تشغيل المجدول الزمني (يعمل يومياً الساعة 10 صباحاً بتوقيت دمشق)
         scheduler = BackgroundScheduler(timezone="Asia/Damascus")
         scheduler.add_job(send_daily_challenges, 'cron', hour=10, minute=0)
         scheduler.start()
 
         print("✅ قاعدة البيانات جاهزة. جاري تشغيل البوت...")
         
-        # حلقة التشغيل المعزولة (لمنع خطأ 409 والخروج المبكر)
+        # حلقة التشغيل المعزولة لمنع تضارب الاتصال 409
         def run_polling():
-            time.sleep(3)  # انتظار إغلاق النسخة القديمة لتجنب التضارب 409
+            time.sleep(3)  # انتظار 3 ثواني لإغلاق النسخة القديمة على Render
             while True:
                 try:
                     bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=10)
@@ -112,7 +114,7 @@ def start_bot_and_db():
         print(f"❌ خطأ أثناء بدء التشغيل: {e}")
 
 # ==========================================
-# تشغيل العمليات الأساسية (بدون مسافات بادئة)
+# التشغيل الأساسي (بدون أي مسافات بادئة)
 # ==========================================
 start_bot_and_db()
 
