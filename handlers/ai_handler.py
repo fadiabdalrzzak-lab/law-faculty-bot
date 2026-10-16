@@ -15,7 +15,7 @@ SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القا
 active_ai_sessions = {}
 
 def ask_gemini(user_id, user_text, reset_session=False):
-    """دالة اتصال فائقة السرعة ومباشرة بالنموذج الأسرع دون حلقات انتظار"""
+    """دالة اتصال ذكية ومحمية ضد ضغط السيرفرات مع إعادة محاولة فورية"""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     if reset_session or user_id not in active_ai_sessions:
@@ -28,32 +28,18 @@ def ask_gemini(user_id, user_text, reset_session=False):
         )
     )
 
-    # الاتصال المباشر والفوري بالنموذج الأسرع والأكثر استقراراً
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=active_ai_sessions[user_id],
-            config=types.GenerateContentConfig(
-                system_instruction=SYRIAN_LAW_PROMPT,
-                temperature=0.3 # تقليل العشوائية لزيادة سرعة التفكير ودقة القوانين
-            )
-        )
-        reply_text = response.text
-        active_ai_sessions[user_id].append(
-            types.Content(
-                role="model",
-                parts=[types.Part.from_text(text=reply_text)]
-            )
-        )
-        return reply_text
-    except Exception as e:
-        # محاولة احتياطية ثانية سريعة جداً بالاسم الافتراضي العام في حال الطوارئ
+    # قائمة النماذج المعتمدة لضمان عدم توقف البوت أبداً
+    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash"]
+    last_error = None
+
+    for model_name in models_to_try:
         try:
             response = client.models.generate_content(
-                model="gemini-flash-latest",
+                model=model_name,
                 contents=active_ai_sessions[user_id],
                 config=types.GenerateContentConfig(
-                    system_instruction=SYRIAN_LAW_PROMPT
+                    system_instruction=SYRIAN_LAW_PROMPT,
+                    temperature=0.3
                 )
             )
             reply_text = response.text
@@ -64,10 +50,15 @@ def ask_gemini(user_id, user_text, reset_session=False):
                 )
             )
             return reply_text
-        except Exception as inner_e:
-            if active_ai_sessions.get(user_id):
-                active_ai_sessions[user_id].pop()
-            raise inner_e
+        except Exception as e:
+            last_error = e
+            continue
+
+    if active_ai_sessions.get(user_id):
+        active_ai_sessions[user_id].pop()
+    
+    # رسالة واضحة في حال الضغط الشديد
+    raise Exception("المستشار الذكي يمر بضغط مؤقت، يرجى إعادة المحاولة بعد ثانية واحدة.")
 
 def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
     """دالة لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
@@ -169,7 +160,7 @@ def register_ai_handlers(bot):
 
         except Exception as e:
             print(f"Gemini API Error: {e}")
-            bot.send_message(call.message.chat.id, f"⚠️ **حدث خطأ أثناء الاتصال بالمستشار الذكي:**\n`{str(e)}`", parse_mode="Markdown")
+            bot.send_message(call.message.chat.id, f"⚠️ **تنبيه:**\n`{str(e)}`", parse_mode="Markdown")
 
 
     # ==================== 3. إنهاء النقاش والعودة ====================
@@ -205,4 +196,4 @@ def register_ai_handlers(bot):
             send_long_response(bot, message.chat.id, reply_text, reply_markup=markup, reply_to=message)
         except Exception as e:
             print(f"Gemini Chat Error: {e}")
-            bot.reply_to(message, f"⚠️ **خطأ تقني أثناء الرد:**\n`{str(e)}`", parse_mode="Markdown")
+            bot.reply_to(message, f"⚠️ **تنبيه:**\n`{str(e)}`", parse_mode="Markdown")
