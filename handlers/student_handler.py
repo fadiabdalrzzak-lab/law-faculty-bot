@@ -41,7 +41,7 @@ def register_student_handlers(bot):
     @bot.message_handler(func=lambda msg: msg.text in [
         "🏛 تدريب الدورات المؤتمتة", "📝 الاختبارات", "📚 المكتبة", 
         "🧠 البطاقات التعليمية", "📅 خطة الدراسة", "📈 تقدمي الدراسي", 
-        "🏆 الإنجازات", "⚙️ إعدادات حسابي", "🤖 المساعد الذكي", "💬 الدعم والملاحظات"
+        "🏆 الإنجازات", "⚙️ إعدادات حسابي", "💬 الدعم والملاحظات"
     ])
     def handle_student_menus(message):
         user_id = message.from_user.id
