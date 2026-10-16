@@ -1,66 +1,127 @@
-import google.generativeai as genai
-from telebot import types
+from google import genai
+from google.genai import types
+from telebot import types as tg_types
 from config import GEMINI_API_KEY
-
-# تهيئة الذكاء الاصطناعي بالمفتاح السري
-genai.configure(api_key=GEMINI_API_KEY)
+from database import get_db, release_db
+from utils import safe_answer_callback, check_subscription, send_sub_required_msg
 
 # التوجيه الصارم (System Prompt) لتقمص الشخصية القانونية السورية
-SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ في القانون السوري حصراً. مهمتك شرح الأسئلة لطلاب كلية الحقوق بجامعة دمشق. 
-استند في تبريرك إلى التشريع السوري، والاجتهاد القضائي السوري (محكمة النقض السورية)، والفقه السوري المعتمد. 
-تجنب تماماً أي إشارة لقوانين دول أخرى (كالمصري أو الفرنسي) ما لم يكن السؤال صراحة عن القانون المقارن. 
-كن أكاديمياً، دقيقاً، واستخدم لغة قانونية رصينة، مع تبسيط العلة التشريعية للطالب لتسهيل الفهم وليس الحفظ فقط."""
+SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القانون السوري حصراً. مهمتك مساعدة وشرح المواد والأسئلة لطلاب كلية الحقوق بجامعة دمشق. 
+استند في إجاباتك وتبريرك إلى التشريع السوري النافذ، والاجتهاد القضائي السوري (محكمة النقض السورية)، والفقه القانوني السوري المعتمد. 
+تجنب تماماً أي إشارة لقوانين دول أخرى (كالمصري أو الفرنسي) ما لم يكن السؤال صراحة عن القانون المقارن أو تاريخ القانون. 
+كن أكاديمياً، دقيقاً، واستخدم لغة قانونية رصينة، مع تبسيط العلة التشريعية للطالب لتسهيل الفهم العميق وليس الحفظ البصم فقط."""
 
-# دالة ذكية لاختيار أحدث نموذج متاح تلقائياً لمنع خطأ 404 مستقبلاً
-def get_working_model():
-    preferred_models = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-pro"
-    ]
-    for model_name in preferred_models:
-        try:
-            return genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=SYRIAN_LAW_PROMPT
-            )
-        except Exception:
-            continue
-    return genai.GenerativeModel("gemini-2.5-flash")
-
-# قاموس لحفظ جلسات النقاش النشطة للطلاب
+# قاموس لحفظ سجل المحادثة لكل طالب
 active_ai_sessions = {}
+
+def ask_gemini(user_id, user_text, reset_session=False):
+    """دالة الاتصال بالحزمة الجديدة google-genai مع حفظ سياق النقاش"""
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    if reset_session or user_id not in active_ai_sessions:
+        active_ai_sessions[user_id] = []
+
+    # إضافة رسالة الطالب إلى سجل المحادثة
+    active_ai_sessions[user_id].append(
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=user_text)]
+        )
+    )
+
+    # قائمة النماذج المعتمدة في التوثيق الجديد بالترتيب
+    models_to_try = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.0-flash"]
+    last_error = None
+
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=active_ai_sessions[user_id],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYRIAN_LAW_PROMPT
+                )
+            )
+            reply_text = response.text
+            # حفظ رد المستشار في السجل لمتابعة النقاش
+            active_ai_sessions[user_id].append(
+                types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=reply_text)]
+                )
+            )
+            return reply_text
+        except Exception as e:
+            last_error = e
+            continue
+
+    # في حال فشل الإرسال نحذف آخر رسالة معلقة ونرفع الخطأ
+    if active_ai_sessions.get(user_id):
+        active_ai_sessions[user_id].pop()
+    raise last_error if last_error else Exception("تعذر الاتصال بنماذج Gemini.")
+
 
 def register_ai_handlers(bot):
 
+    # ==================== 1. زر المساعد الذكي من القائمة الرئيسية ====================
+    @bot.message_handler(func=lambda msg: msg.text == "🤖 المساعد الذكي")
+    def handle_main_ai_button(message):
+        user_id = message.from_user.id
+        if not check_subscription(bot, user_id):
+            return send_sub_required_msg(bot, message.chat.id)
+
+        try:
+            bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            pass
+
+        active_ai_sessions[user_id] = []
+
+        markup = tg_types.InlineKeyboardMarkup()
+        markup.add(tg_types.InlineKeyboardButton("🏠 إنهاء الجلسة وإغلاق المساعد", callback_data="exit_ai_chat"))
+
+        welcome_msg = (
+            "⚖️ **أهلاً بك في مكتب المستشار القانوني الذكي (AI)**\n\n"
+            "أنا مبرمج خصيصاً لمساعدتك في دراسة **القانون السوري** وفق مناهج كلية الحقوق بجامعة دمشق.\n\n"
+            "🔹 **كيف يمكنني مساعدتك اليوم؟**\n"
+            "• اشرح لي فكرة أو نظرية قانونية مستعصية.\n"
+            "• ما الفرق بين مصطلحين قانونيين (مثل البطلان والفسخ)؟\n"
+            "• اطرح عليّ قضية عملية لنقوم بتكييفها قانونياً معاً.\n\n"
+            "✍️ **اكتب سؤالك أو استفسارك في رسالة الآن مباشرة:**"
+        )
+        bot.send_message(message.chat.id, welcome_msg, parse_mode="Markdown", reply_markup=markup)
+
+
+    # ==================== 2. زر التكييف القانوني داخل التدريب ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("ai_explain_"))
     def handle_ai_explain(call):
         q_id = int(call.data.split("_")[2])
         user_id = call.from_user.id
         
-        from database import get_db, release_db
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT question_text, option_a, option_b, option_c, option_d, correct_option FROM questions WHERE id=%s", (q_id,))
+            cur.execute("SELECT subject, question_text, option_a, option_b, option_c, option_d, correct_option FROM questions WHERE id=%s", (q_id,))
             q = cur.fetchone()
             cur.close()
         except Exception:
+            conn.rollback()
             q = None
         finally:
             release_db(conn)
 
         if not q:
-            return bot.answer_callback_query(call.id, "❌ لم يتم العثور على السؤال.", show_alert=True)
+            return safe_answer_callback(bot, call.id, "❌ لم يتم العثور على السؤال.", show_alert=True)
 
-        bot.answer_callback_query(call.id, "⚖️ جاري تحضير التكييف القانوني للسؤال...")
+        safe_answer_callback(bot, call.id, "⚖️ جاري تحضير التكييف القانوني للسؤال...")
         bot.send_chat_action(call.message.chat.id, 'typing')
 
-        q_text, a, b, c, d, correct = q
-        correct_full = {"أ": a, "ب": b, "ج": c, "د": d}.get(correct.strip(), "")
+        sub, q_text, a, b, c, d, correct = q
+        correct_clean = str(correct).strip() if correct else ""
+        correct_full = {"أ": a, "ب": b, "ج": c, "د": d}.get(correct_clean, "")
 
         prompt = f"""
+        المادة الدراسية: {sub}
         الرجاء شرح هذا السؤال الامتحاني المؤتمت:
         النص: {q_text}
         الخيارات:
@@ -69,36 +130,20 @@ def register_ai_handlers(bot):
         ج) {c}
         د) {d}
         
-        الإجابة الصحيحة المعتمدة في السلم الامتحاني هي: ({correct}) {correct_full}
+        الإجابة الصحيحة المعتمدة في السلم الامتحاني هي: ({correct_clean}) {correct_full}
         
-        اشرح لي باختصار لماذا هذه الإجابة هي الصحيحة وفقاً للقانون السوري؟ ولماذا تعتبر الخيارات الأخرى خاطئة؟
+        اشرح لي باختصار ووضوح:
+        1. لماذا تعتبر هذه الإجابة هي الصحيحة وفقاً للقانون السوري؟
+        2. لماذا تعتبر الخيارات الأخرى غير دقيقة أو خاطئة؟
         """
 
         try:
-            # محاولة الاتصال بالنموذج الأحدث، وفي حال رفضه يتم جلب أول نموذج متاح في الحساب تلقائياً
-            try:
-                model = genai.GenerativeModel(model_name="gemini-2.5-flash", system_instruction=SYRIAN_LAW_PROMPT)
-                chat = model.start_chat(history=[])
-                response = chat.send_message(prompt)
-            except Exception:
-                available_models = [
-                    m.name for m in genai.list_models() 
-                    if 'generateContent' in m.supported_generation_methods
-                ]
-                if not available_models:
-                    raise Exception("لا توجد نماذج متاحة لهذا المفتاح.")
-                # اختيار أول نموذج متاح من قائمة جوجل الرسمية
-                fallback_model_name = available_models[0]
-                model = genai.GenerativeModel(model_name=fallback_model_name)
-                chat = model.start_chat(history=[])
-                response = chat.send_message(SYRIAN_LAW_PROMPT + "\n\n" + prompt)
+            reply_text = ask_gemini(user_id, prompt, reset_session=True)
 
-            active_ai_sessions[user_id] = chat
-
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
+            markup = tg_types.InlineKeyboardMarkup()
+            markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
             
-            msg_text = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{response.text}\n\n*💡 يمكنك الآن الرد على هذه الرسالة لطرح المزيد من الأسئلة حول هذه القاعدة القانونية.*"
+            msg_text = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الآن الرد على هذه الرسالة لطرح أي سؤال إضافي حول هذه القاعدة القانونية.*"
             try:
                 bot.send_message(call.message.chat.id, msg_text, parse_mode="Markdown", reply_markup=markup)
             except Exception:
@@ -108,6 +153,8 @@ def register_ai_handlers(bot):
             print(f"Gemini API Error: {e}")
             bot.send_message(call.message.chat.id, f"⚠️ **حدث خطأ أثناء الاتصال بالمستشار الذكي:**\n`{str(e)}`", parse_mode="Markdown")
 
+
+    # ==================== 3. إنهاء النقاش والعودة ====================
     @bot.callback_query_handler(func=lambda call: call.data == "exit_ai_chat")
     def handle_exit_ai(call):
         user_id = call.from_user.id
@@ -117,10 +164,12 @@ def register_ai_handlers(bot):
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        bot.send_message(call.message.chat.id, "🔙 **تم إنهاء النقاش القانوني.**\nيمكنك الآن متابعة التدريب من رسالة الاختبار بالأعلى 👆", parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "تمت العودة للتدريب")
+        bot.send_message(call.message.chat.id, "🔙 **تم إغلاق جلسة النقاش القانوني.**\nيمكنك متابعة دراستك أو تدريباتك كالمعتاد 👆", parse_mode="Markdown")
+        safe_answer_callback(bot, call.id, "تم إنهاء النقاش")
 
-    @bot.message_handler(func=lambda msg: msg.from_user.id in active_ai_sessions and msg.text not in [
+
+    # ==================== 4. التقاط رسائل النقاش المفتوح مع المستشار ====================
+    @bot.message_handler(func=lambda msg: msg.from_user.id in active_ai_sessions and msg.text and not msg.text.startswith("/") and msg.text not in [
         "➡️ السؤال التالي", "⬅️ السؤال السابق", "🔄 إعادة الاختبار", 
         "🏁 إنهاء وعرض النتيجة", "🏁 إنهاء وتسليم الورقة", "💾 حفظ السؤال للمراجعة", 
         "⚠️ الإبلاغ عن خطأ", "📚 الانتقال إلى مادة أخرى", "🏠 القائمة الرئيسية",
@@ -130,17 +179,15 @@ def register_ai_handlers(bot):
     ])
     def handle_ai_discussion(message):
         user_id = message.from_user.id
-        chat_session = active_ai_sessions[user_id]
-        
         bot.send_chat_action(message.chat.id, 'typing')
         try:
-            response = chat_session.send_message(message.text)
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
+            reply_text = ask_gemini(user_id, message.text, reset_session=False)
+            markup = tg_types.InlineKeyboardMarkup()
+            markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش", callback_data="exit_ai_chat"))
             try:
-                bot.reply_to(message, response.text, parse_mode="Markdown", reply_markup=markup)
+                bot.reply_to(message, reply_text, parse_mode="Markdown", reply_markup=markup)
             except Exception:
-                bot.reply_to(message, response.text, reply_markup=markup)
+                bot.reply_to(message, reply_text, reply_markup=markup)
         except Exception as e:
             print(f"Gemini Chat Error: {e}")
-            bot.reply_to(message, f"⚠️ **خطأ تقني:**\n`{str(e)}`", parse_mode="Markdown")
+            bot.reply_to(message, f"⚠️ **خطأ تقني أثناء الرد:**\n`{str(e)}`", parse_mode="Markdown")
