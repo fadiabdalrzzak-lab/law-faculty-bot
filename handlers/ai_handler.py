@@ -6,16 +6,16 @@ from database import get_db, release_db
 from utils import safe_answer_callback, check_subscription, send_sub_required_msg
 
 # التوجيه الصارم (System Prompt) لتقمص الشخصية القانونية السورية
-SYRIAN_LAW_PROMPT = """أنت مستشار وأستاذ جامعي في القانون السوري حصراً. مهمتك مساعدة وشرح المواد والأسئلة لطلاب كلية الحقوق بجامعة دمشق. 
-استند في إجاباتك وتبريرك إلى التشريع السوري النافذ، والاجتهاد القضائي السوري (محكمة النقض السورية)، والفقه القانوني السوري المعتمد. 
-تجنب تماماً أي إشارة لقوانين دول أخرى (كالمصري أو الفرنسي) ما لم يكن السؤال صراحة عن القانون المقارن أو تاريخ القانون. 
-كن أكاديمياً، دقيقاً، واستخدم لغة قانونية رصينة، مع تبسيط العلة التشريعية للطالب لتسهيل الفهم العميق وليس الحفظ البصم فقط."""
+SYRIAN_LAW_PROMPT = """أنت مستشار قانوني وأستاذ جامعي خبير في القانون السوري حصراً. مهمتك مساعدة وشرح المواد والأسئلة لطلاب كلية الحقوق بجامعة دمشق. 
+استند في إجاباتك وتحليلاتك القانونية إلى التشريع السوري النافذ، والاجتهاد القضائي السوري (محكمة النقض)، والفقه القانوني السوري المعتمد. 
+تجنب تماماً أي إشارة لقوانين دول أخرى ما لم يطلب الطالب ذلك صراحة. 
+كن دقيقاً، أكاديمياً، واستخدم لغة قانونية رصينة، مع تفصيل العلة التشريعية لتسهيل الفهم العميق."""
 
 # قاموس لحفظ سجل المحادثة لكل طالب
 active_ai_sessions = {}
 
 def ask_gemini(user_id, user_text, reset_session=False):
-    """دالة اتصال ذكية ومحمية ضد ضغط السيرفرات مع إعادة محاولة فورية"""
+    """دالة اتصال مخصصة لحسابات Pro لاستخدام النماذج الاحترافية المستقرة"""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     if reset_session or user_id not in active_ai_sessions:
@@ -28,18 +28,18 @@ def ask_gemini(user_id, user_text, reset_session=False):
         )
     )
 
-    # قائمة النماذج المعتمدة لضمان عدم توقف البوت أبداً
-    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash"]
+    # الاعتماد حصرياً على النماذج الاحترافية القوية لحسابات الـ Pro
+    pro_models = ["gemini-1.5-pro", "gemini-pro"]
     last_error = None
 
-    for model_name in models_to_try:
+    for model_name in pro_models:
         try:
             response = client.models.generate_content(
                 model=model_name,
                 contents=active_ai_sessions[user_id],
                 config=types.GenerateContentConfig(
                     system_instruction=SYRIAN_LAW_PROMPT,
-                    temperature=0.3
+                    temperature=0.2 # دقة عالية جداً وثبات قانوني
                 )
             )
             reply_text = response.text
@@ -56,9 +56,7 @@ def ask_gemini(user_id, user_text, reset_session=False):
 
     if active_ai_sessions.get(user_id):
         active_ai_sessions[user_id].pop()
-    
-    # رسالة واضحة في حال الضغط الشديد
-    raise Exception("المستشار الذكي يمر بضغط مؤقت، يرجى إعادة المحاولة بعد ثانية واحدة.")
+    raise last_error if last_error else Exception("تعذر الاتصال بالنماذج الاحترافية.")
 
 def send_long_response(bot, chat_id, text, reply_markup=None, reply_to=None):
     """دالة لتقسيم النصوص الطويلة جداً لتجنب خطأ 400 message is too long"""
@@ -100,8 +98,8 @@ def register_ai_handlers(bot):
         markup.add(tg_types.InlineKeyboardButton("🏠 إنهاء الجلسة وإغلاق المساعد", callback_data="exit_ai_chat"))
 
         welcome_msg = (
-            "⚖️ **أهلاً بك في مكتب المستشار القانوني الذكي (AI)**\n\n"
-            "أنا مبرمج خصيصاً لمساعدتك في دراسة **القانون السوري** وفق مناهج كلية الحقوق بجامعة دمشق.\n\n"
+            "⚖️ **أهلاً بك في مكتب المستشار القانوني المحترف (Pro AI)**\n\n"
+            "أنا مدعوم بنماذج Pro الاحترافية لمساعدتك في دراسة **القانون السوري** وفق مناهج كلية الحقوق بجامعة دمشق بدقة متناهية.\n\n"
             "🔹 **كيف يمكنني مساعدتك اليوم؟**\n"
             "• اشرح لي فكرة أو نظرية قانونية مستعصية.\n"
             "• ما الفرق بين مصطلحين قانونيين (مثل البطلان والفسخ)؟\n"
@@ -132,7 +130,7 @@ def register_ai_handlers(bot):
         if not q:
             return safe_answer_callback(bot, call.id, "❌ لم يتم العثور على السؤال.", show_alert=True)
 
-        safe_answer_callback(bot, call.id, "⚖️ جاري تحضير التكييف القانوني للسؤال...")
+        safe_answer_callback(bot, call.id, "⚖️ جاري تحضير التكييف القانوني المحترف...")
         bot.send_chat_action(call.message.chat.id, 'typing')
 
         sub, q_text, a, b, c, d, correct = q
@@ -141,12 +139,12 @@ def register_ai_handlers(bot):
 
         prompt = f"""
         المادة الدراسية: {sub}
-        اشرح هذا السؤال الامتحاني باختصار شديد ومركز:
+        قم بالتكييف القانوني لهذا السؤال الامتحاني بأسلوب أكاديمي دقيق ومباشر:
         النص: {q_text}
         الخيارات: أ) {a} | ب) {b} | ج) {c} | د) {d}
         الإجابة الصحيحة: ({correct_clean}) {correct_full}
         
-        بيّن باختصار شديد العلة القانونية السورية للإجابة الصحيحة ولماذا أخطأت بقية الخيارات.
+        وضّح السند القانوني السوري للإجابة الصحيحة وسبب استبعاد بقية الخيارات بدقة.
         """
 
         try:
@@ -155,12 +153,12 @@ def register_ai_handlers(bot):
             markup = tg_types.InlineKeyboardMarkup()
             markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش والعودة للتدريب", callback_data="exit_ai_chat"))
             
-            full_msg = f"⚖️ **التكييف القانوني (المستشار الذكي):**\n\n{reply_text}\n\n*💡 يمكنك الرد على هذه الرسالة لطرح أي سؤال إضافي.*"
+            full_msg = f"⚖️ **التكييف القانوني (المستشار المحترف Pro):**\n\n{reply_text}\n\n*💡 يمكنك الرد على هذه الرسالة لطرح أي استفسار إضافي.*"
             send_long_response(bot, call.message.chat.id, full_msg, reply_markup=markup)
 
         except Exception as e:
-            print(f"Gemini API Error: {e}")
-            bot.send_message(call.message.chat.id, f"⚠️ **تنبيه:**\n`{str(e)}`", parse_mode="Markdown")
+            print(f"Gemini Pro API Error: {e}")
+            bot.send_message(call.message.chat.id, f"⚠️ **خطأ في الاتصال بنماذج Pro:**\n`{str(e)}`", parse_mode="Markdown")
 
 
     # ==================== 3. إنهاء النقاش والعودة ====================
@@ -195,5 +193,5 @@ def register_ai_handlers(bot):
             markup.add(tg_types.InlineKeyboardButton("🔙 إنهاء النقاش", callback_data="exit_ai_chat"))
             send_long_response(bot, message.chat.id, reply_text, reply_markup=markup, reply_to=message)
         except Exception as e:
-            print(f"Gemini Chat Error: {e}")
-            bot.reply_to(message, f"⚠️ **تنبيه:**\n`{str(e)}`", parse_mode="Markdown")
+            print(f"Gemini Pro Chat Error: {e}")
+            bot.reply_to(message, f"⚠️ **خطأ تقني:**\n`{str(e)}`", parse_mode="Markdown")
