@@ -38,12 +38,9 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
                 btn_txt = f"🔘 {btn_txt}"
             markup.add(types.InlineKeyboardButton(btn_txt, callback_data=f"ans_{letter}_{q_id}"))
 
-    # إضافة زر المستشار الذكي أسفل الخيارات في وضع التدريب فقط
+    # إضافة زر التكييف القانوني الثابت والسريع أسفل الخيارات في وضع التدريب فقط
     if quiz_type == "training":
-        markup.add(types.InlineKeyboardButton("💡 التكييف القانوني (AI)", callback_data=f"ai_explain_{q_id}"))
-
-    total = len(questions)
-
+        markup.add(types.InlineKeyboardButton("⚖️ التكييف القانوني", callback_data=f"ai_explain_{q_id}"))
 
     total = len(questions)
     progress_count = int((index / total) * 10) if total else 0
@@ -64,7 +61,6 @@ def send_current_question(bot, chat_id, user_id, session, message_id=None):
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=markup)
             return
         except Exception as e:
-            # حماية البوت من التجمد إذا تم الضغط على نفس الإجابة (حل مشكلة تكرار السؤال)
             if "not modified" in str(e).lower():
                 return
 
@@ -83,23 +79,33 @@ def finish_exam(bot, chat_id, user_id, session):
             cur = conn.cursor()
             cur.execute("SELECT id, correct_option FROM questions WHERE id = ANY(%s)", (session["question_ids"],))
             correct_answers = {str(r[0]): str(r[1]).strip().lower() for r in cur.fetchall()}
+            
+            correct, wrong = 0, 0
+            wrong_ids, correct_ids = [], []
+            ans_dict = session.get("answered_dict", {})
+            
+            for q_id_val in session["question_ids"]:
+                ans = ans_dict.get(str(q_id_val), "").lower()
+                corr = correct_answers.get(str(q_id_val), "").lower()
+                if ans == corr and ans != "":
+                    correct += 1
+                    correct_ids.append(q_id_val)
+                else:
+                    wrong += 1
+                    wrong_ids.append(q_id_val)
+            
+            # تحديث حقيبة الأخطاء ورادار الفخاخ بعد تسليم ورقة الامتحان الشامل
+            if wrong_ids:
+                cur.executemany("INSERT INTO user_mistakes (user_id, question_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", [(user_id, qid) for qid in wrong_ids])
+                cur.execute("UPDATE questions SET wrong_count = COALESCE(wrong_count, 0) + 1 WHERE id = ANY(%s)", (wrong_ids,))
+            if correct_ids:
+                cur.execute("DELETE FROM user_mistakes WHERE user_id = %s AND question_id = ANY(%s)", (user_id, correct_ids))
+
+            conn.commit()
             cur.close()
         except Exception as e:
             conn.rollback()
         finally: release_db(conn)
-
-        correct, wrong = 0, 0
-        wrong_ids = []
-        ans_dict = session.get("answered_dict", {})
-        
-        for q_id_val in session["question_ids"]:
-            ans = ans_dict.get(str(q_id_val), "").lower()
-            corr = correct_answers.get(str(q_id_val), "").lower()
-            if ans == corr and ans != "":
-                correct += 1
-            else:
-                wrong += 1
-                wrong_ids.append(q_id_val)
         
         session["correct_count"] = correct
         session["wrong_count"] = wrong
@@ -171,7 +177,6 @@ def finish_exam(bot, chat_id, user_id, session):
         print("DB ERROR saving stats/badges:", e)
     finally: release_db(conn)
 
-    # --- إرسال التهنئة اللحظية إذا حصل على وسام جديد ---
     if new_achievements:
         celebration_msg = "🎉 **إنجاز جديد يضاف لمسيرتك!** 🎉\n\nلقد أثبتّ جدارتك وحصلت للتو على:\n\n"
         for name, icon in new_achievements:
@@ -187,7 +192,7 @@ def finish_exam(bot, chat_id, user_id, session):
     if wrong_ids:
         user_mistakes_cache[user_id] = {"subject": session.get("subject", ""), "session_name": session.get("session_name", ""), "q_ids": wrong_ids}
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 إعادة اختبار الأسئلة الخاطئة", callback_data="retry_mistakes"))
+        markup.add(types.InlineKeyboardButton("🔄 إعادة اختبار الأسئلة الخاطئة فوراً", callback_data="retry_mistakes"))
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=markup)
     else:
         bot.send_message(chat_id, result_text, parse_mode="Markdown", reply_markup=get_student_main_keyboard())
@@ -318,14 +323,26 @@ def register_exam_handlers(bot):
             cur = conn.cursor()
             cur.execute("SELECT option_a, option_b, option_c, option_d, correct_option FROM questions WHERE id = %s;", (q_id,))
             row = cur.fetchone()
+            
+            correct_letter = str(row[4]).strip()
+            is_correct = (selected_letter.lower() == correct_letter.lower())
+            
+            if is_correct:
+                # إذا أجاب بشكل صحيح، نحذف السؤال من حقيبة أخطائه السابقة لأنه أتقنه
+                cur.execute("DELETE FROM user_mistakes WHERE user_id = %s AND question_id = %s;", (user_id, q_id))
+            else:
+                # إذا أخطأ، نضيف السؤال لحقيبة أخطائه ونزيد عداد الفخاخ للسؤال
+                cur.execute("INSERT INTO user_mistakes (user_id, question_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;", (user_id, q_id))
+                cur.execute("UPDATE questions SET wrong_count = COALESCE(wrong_count, 0) + 1 WHERE id = %s;", (q_id,))
+            
+            conn.commit()
             cur.close()
         except Exception as e:
             conn.rollback()
             return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
-        correct_letter = str(row[4]).strip()
-        if selected_letter.lower() == correct_letter.lower():
+        if is_correct:
             session["correct_count"] = session.get("correct_count", 0) + 1
             safe_answer_callback(bot, call.id, "✅ إجابة صحيحة! (+10 XP)")
         else:
