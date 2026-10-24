@@ -9,6 +9,65 @@ import json
 student_search_states = {}
 
 def register_student_handlers(bot):
+    # ==================== معالج أمر البدء /start ====================
+    @bot.message_handler(commands=['start'])
+    def handle_start(message):
+        user_id = message.from_user.id
+        username = message.from_user.username or ""
+        first_name = message.from_user.first_name or "زميلنا"
+
+        # تسجيل الطالب في قاعدة البيانات إن لم يكن مسجلاً مسبقاً
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO users (user_id, username, first_name, join_date)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    first_name = EXCLUDED.first_name
+            """, (user_id, username, first_name))
+            
+            # التحقق من سنته الدراسية
+            cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
+            res = cur.fetchone()
+            year = res[0] if res else 0
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            print(f"Start DB Error: {e}")
+            year = 0
+        finally:
+            release_db(conn)
+
+        # فحص الاشتراك الإجباري أولاً
+        if not check_subscription(bot, user_id):
+            return send_sub_required_msg(bot, message.chat.id)
+
+        try:
+            bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            pass
+
+        if year == 0:
+            markup = types.InlineKeyboardMarkup()
+            for y_num, y_name in YEARS.items():
+                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
+            bot.send_message(
+                message.chat.id,
+                f"أهلاً بك يا زميلي **{md(first_name)}** في منصة طلاب حقوق دمشق ⚖️✨\n\n"
+                f"لتخصيص تجربتك وعرض الأسئلة المناسبة لسنتك الدراسية، يرجى **اختيار سنتك الدراسية**:",
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                f"أهلاً بك مجدداً يا زميلي **{md(first_name)}** ⚖️💙\n\n"
+                f"منصتك جاهزة لمساعدتك في التدريب واجتياز الامتحانات بتفوق.",
+                parse_mode="Markdown",
+                reply_markup=get_student_main_keyboard()
+            )
 
     # ==================== استقبال المشتركين الجدد (Onboarding) ====================
     @bot.callback_query_handler(func=lambda call: call.data == "check_sub")
