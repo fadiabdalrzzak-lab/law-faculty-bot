@@ -4,6 +4,6 @@ psycopg2-binary
 pandas
 openpyxl
 APScheduler
-google-genai
+
 
 
