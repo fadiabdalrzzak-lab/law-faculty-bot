@@ -46,9 +46,13 @@ def init_db():
                 id SERIAL PRIMARY KEY, year INTEGER NOT NULL, semester INTEGER NOT NULL DEFAULT 1,
                 subject TEXT NOT NULL, exam_session TEXT NOT NULL, question_text TEXT NOT NULL,
                 option_a TEXT NOT NULL, option_b TEXT NOT NULL, option_c TEXT NOT NULL, option_d TEXT NOT NULL,
-                correct_option TEXT NOT NULL, explanation TEXT
+                correct_option TEXT NOT NULL, explanation TEXT,
+                wrong_count INTEGER DEFAULT 0
             );
         """)
+        # التأكد من وجود عمود التكييف القانوني وعداد الفخاخ في حال كان الجدول منشأً مسبقاً
+        cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS explanation TEXT;")
+        cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS wrong_count INTEGER DEFAULT 0;")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pdf_files (
@@ -60,6 +64,16 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS saved_questions (user_id BIGINT, question_id INTEGER, PRIMARY KEY (user_id, question_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_flashcards (user_id BIGINT, flashcard_id INTEGER, PRIMARY KEY (user_id, flashcard_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_pdfs (user_id BIGINT, pdf_id INTEGER, PRIMARY KEY (user_id, pdf_id));")
+
+        # جدول حقيبة الأخطاء الشخصية للطالب (مراجعة ليلة الامتحان)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_mistakes (
+                user_id BIGINT,
+                question_id INTEGER,
+                added_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, question_id)
+            );
+        """)
 
         cur.execute("CREATE TABLE IF NOT EXISTS quiz_sessions (user_id BIGINT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMP DEFAULT NOW());")
         
