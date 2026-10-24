@@ -16,7 +16,7 @@ def show_mng_questions_page(bot, chat_id, year_num, sem_num, sub_idx, page=1, me
         subjects = [r[0] for r in cur.fetchall()]
         if sub_idx >= len(subjects): return
         subject_name = subjects[sub_idx]
-        cur.execute("SELECT id, exam_session, question_text, correct_option FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
+        cur.execute("SELECT id, exam_session, question_text, correct_option, explanation FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
         questions = cur.fetchall()
         cur.close()
     finally: release_db(conn)
@@ -33,7 +33,8 @@ def show_mng_questions_page(bot, chat_id, year_num, sem_num, sub_idx, page=1, me
     text = f"📋 **({subject_name}) - صفحة {page}/{total_pages}:**\n\n"
     markup = types.InlineKeyboardMarkup()
     for idx, q in enumerate(current_qs, start=start + 1):
-        text += f"**{idx}.** 🗓️ {q[1]} | ✔️ ({q[3]})\n❓ {md(q[2])}\n\n"
+        has_exp = "⚖️" if (q[4] and str(q[4]).strip()) else "➖"
+        text += f"**{idx}.** [ID: `{q[0]}`] 🗓️ {q[1]} | ✔️ ({q[3]}) {has_exp}\n❓ {md(q[2])}\n\n"
         markup.add(types.InlineKeyboardButton(f"🗑️ حذف رقم {idx}", callback_data=f"delq_{q[0]}_{year_num}_{sem_num}_{sub_idx}_{page}"))
 
     nav = []
@@ -75,6 +76,24 @@ def register_admin_handlers(bot):
             finally: release_db(conn)
         except Exception as e: bot.reply_to(message, f"❌ خطأ: {e}")
 
+    @bot.message_handler(commands=['fix_exp'])
+    def fix_question_explanation(message):
+        if not is_admin(message.from_user.id): return
+        try:
+            parts = message.text.split(maxsplit=2)
+            if len(parts) < 3:
+                return bot.reply_to(message, "⚠️ **الاستخدام لتعديل التكييف القانوني:**\n`/fix_exp [رقم_السؤال] [نص التكييف القانوني الجديد]`", parse_mode="Markdown")
+            q_id, new_exp = int(parts[1]), parts[2].strip()
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("UPDATE questions SET explanation = %s WHERE id = %s;", (new_exp, q_id))
+                conn.commit()
+                cur.close()
+                bot.reply_to(message, f"✅ تم تحديث التكييف القانوني للسؤال رقم **{q_id}** بنجاح!", parse_mode="Markdown")
+            finally: release_db(conn)
+        except Exception as e: bot.reply_to(message, f"❌ خطأ: {e}")
+
     @bot.message_handler(func=lambda msg: is_admin(msg.from_user.id) and msg.text in [
         "📥 رفع أسئلة (Excel/CSV)", "📝 إضافة سؤال فردي", "📊 إحصائيات البوت", 
         "🗑️ إدارة/حذف الأسئلة", "🗂️ حذف دورة كاملة", "📄 رفع ملف PDF جديد", 
@@ -108,22 +127,24 @@ def register_admin_handlers(bot):
                 u_count = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM questions")
                 q_count = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM questions WHERE explanation IS NOT NULL AND explanation != ''")
+                exp_count = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM pdf_files")
                 p_count = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM flashcards")
                 fc_count = cur.fetchone()[0]
                 cur.close()
             finally: release_db(conn)
-            bot.send_message(message.chat.id, f"📊 **الإحصائيات:**\n👥 الطلاب: {u_count}\n📚 الأسئلة: {q_count}\n📄 الملفات: {p_count}\n📇 البطاقات: {fc_count}", parse_mode="Markdown")
+            bot.send_message(message.chat.id, f"📊 **الإحصائيات:**\n👥 الطلاب: {u_count}\n📚 الأسئلة: {q_count} (منها {exp_count} بتكييف قانوني ⚖️)\n📄 الملفات: {p_count}\n📇 البطاقات: {fc_count}", parse_mode="Markdown")
         elif text == "📤 تصدير الأسئلة (Excel)":
             bot.send_message(message.chat.id, "🔄 جاري التصدير...")
             conn = get_db()
             try:
-                df = pd.read_sql("SELECT year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option FROM questions ORDER BY year, semester, subject", conn)
+                df = pd.read_sql("SELECT year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option, explanation AS legal_explanation, wrong_count FROM questions ORDER BY year, semester, subject", conn)
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='Questions')
                 output.seek(0)
-                bot.send_document(message.chat.id, (f"questions_backup.xlsx", output), caption="📤 **ملف الأسئلة**", parse_mode="Markdown")
+                bot.send_document(message.chat.id, (f"questions_backup.xlsx", output), caption="📤 **نسخة الأسئلة الاحتياطية (شاملة التكييف القانوني وإحصائيات الأخطاء)**", parse_mode="Markdown")
             except Exception as e: bot.send_message(message.chat.id, f"❌ خطأ: `{e}`", parse_mode="Markdown")
             finally: release_db(conn)
         elif text == "📚 قائمة سنوات الحقوق":
@@ -158,7 +179,7 @@ def register_admin_handlers(bot):
                 df.columns = df.columns.str.strip().str.lower()
                 
                 override_session = state.get("session_name")
-                conn, inserted = get_db(), 0
+                conn, inserted, with_exp = get_db(), 0, 0
                 try:
                     cur = conn.cursor()
                     for idx, row in df.iterrows():
@@ -166,13 +187,42 @@ def register_admin_handlers(bot):
                         norm_opt = OPTION_MAP.get(raw_opt, raw_opt)
                         if norm_opt not in OPTION_LETTERS: continue
                         sess_val = override_session if override_session else str(row.get('exam_session', '')).strip()
-                        cur.execute("""INSERT INTO questions (year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (int(row.get('year', 1)), int(row.get('semester', 1)), str(row.get('subject', '')).strip(), sess_val, str(row.get('question_text', '')).strip(), str(row.get('option_a', '')).strip(), str(row.get('option_b', '')).strip(), str(row.get('option_c', '')).strip(), str(row.get('option_d', '')).strip(), norm_opt))
+                        
+                        # التقاط التكييف القانوني بمرونة مهما كانت تسمية العمود في الإكسل
+                        exp_val = str(
+                            row.get('legal_explanation', '') or 
+                            row.get('explanation', '') or 
+                            row.get('التكييف القانوني', '') or 
+                            row.get('الشرح', '')
+                        ).strip()
+                        if exp_val.lower() in ['nan', 'none']:
+                            exp_val = ''
+                        if exp_val:
+                            with_exp += 1
+
+                        cur.execute("""
+                            INSERT INTO questions 
+                            (year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option, explanation) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            int(row.get('year', 1)), int(row.get('semester', 1)), 
+                            str(row.get('subject', '')).strip(), sess_val, 
+                            str(row.get('question_text', '')).strip(), 
+                            str(row.get('option_a', '')).strip(), str(row.get('option_b', '')).strip(), 
+                            str(row.get('option_c', '')).strip(), str(row.get('option_d', '')).strip(), 
+                            norm_opt, exp_val
+                        ))
                         inserted += 1
                     conn.commit()
                     cur.close()
                 finally: release_db(conn)
                 admin_states.pop(user_id, None)
-                bot.send_message(message.chat.id, f"✅ تم إدخال **{inserted}** سؤال!", parse_mode="Markdown", reply_markup=get_admin_main_keyboard())
+                bot.send_message(
+                    message.chat.id, 
+                    f"✅ تم إدخال **{inserted}** سؤال بنجاح!\n⚖️ منها **{with_exp}** سؤال مرفق بالتكييف القانوني.", 
+                    parse_mode="Markdown", 
+                    reply_markup=get_admin_main_keyboard()
+                )
             except Exception as e:
                 bot.send_message(message.chat.id, f"❌ خطأ: `{e}`\nتأكد من تنسيق الأعمدة.", parse_mode="Markdown")
         
@@ -188,7 +238,6 @@ def register_admin_handlers(bot):
             bot.send_message(message.chat.id, f"✅ تم إضافة **{message.document.file_name}**!", parse_mode="Markdown", reply_markup=get_admin_main_keyboard())
             
         elif step == "FC_FRONT":
-            # خيار رفع البطاقات عبر Excel
             file_name = message.document.file_name.lower()
             if not file_name.endswith(('.xlsx', '.xls', '.csv')):
                 return bot.send_message(message.chat.id, "⚠️ يرجى إرسال ملف Excel بصيغة `.xlsx`.")
@@ -268,14 +317,26 @@ def register_admin_handlers(bot):
             bot.send_message(message.chat.id, "اختر الإجابة الصحيحة:", reply_markup=get_correct_option_keyboard())
         elif step == "ENTER_CORRECT":
             if text not in OPTION_LETTERS: return bot.send_message(message.chat.id, "⚠️ اضغط (أ/ب/ج/د).")
+            state["correct_option"], state["step"] = text, "ENTER_EXPLANATION"
+            bot.send_message(message.chat.id, "⚖️ اكتب **التكييف القانوني** للسؤال (أو أرسل نقطة `.` لتخطيه):", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
+        elif step == "ENTER_EXPLANATION":
+            exp_val = "" if text.strip() in [".", "تخطي", "-"] else text.strip()
             conn = get_db()
             try:
                 cur = conn.cursor()
-                cur.execute("""INSERT INTO questions (year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (state["year"], state["semester"], state["subject"], state["session"], state["question_text"], state["option_a"], state["option_b"], state["option_c"], state["option_d"], text))
+                cur.execute("""
+                    INSERT INTO questions 
+                    (year, semester, subject, exam_session, question_text, option_a, option_b, option_c, option_d, correct_option, explanation) 
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    state["year"], state["semester"], state["subject"], state["session"], 
+                    state["question_text"], state["option_a"], state["option_b"], 
+                    state["option_c"], state["option_d"], state["correct_option"], exp_val
+                ))
                 conn.commit()
                 cur.close()
             finally: release_db(conn)
-            bot.send_message(message.chat.id, f"✅ **تمت الإضافة!** الجواب: ({text})", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
+            bot.send_message(message.chat.id, f"✅ **تمت الإضافة!** الجواب: ({state['correct_option']})", parse_mode="Markdown", reply_markup=get_cancel_keyboard())
             state["step"] = "ENTER_QUESTION"
             bot.send_message(message.chat.id, "➕ اكتب نص السؤال التالي:")
         elif step == "PDF_SELECT_YEAR":
@@ -414,6 +475,7 @@ def register_admin_handlers(bot):
             cur = conn.cursor()
             cur.execute("DELETE FROM questions WHERE id=%s", (q_id,))
             cur.execute("DELETE FROM saved_questions WHERE question_id=%s", (q_id,))
+            cur.execute("DELETE FROM user_mistakes WHERE question_id=%s", (q_id,))
             conn.commit()
             cur.close()
         finally: release_db(conn)
@@ -493,6 +555,7 @@ def register_admin_handlers(bot):
                 cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
                 session_name = cur.fetchall()[s_idx][0]
                 cur.execute("DELETE FROM saved_questions WHERE question_id IN (SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s)", (year_num, sem_num, subject_name, session_name))
+                cur.execute("DELETE FROM user_mistakes WHERE question_id IN (SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s)", (year_num, sem_num, subject_name, session_name))
                 cur.execute("DELETE FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s", (year_num, sem_num, subject_name, session_name))
                 count = cur.rowcount
                 conn.commit()
