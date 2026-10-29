@@ -197,6 +197,43 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"fcy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
+      
+        elif text == "📅 خطة الدراسة":
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT plan_data FROM study_plans WHERE user_id=%s", (user_id,))
+                res = cur.fetchone()
+                cur.close()
+            except Exception:
+                res = None
+            finally: release_db(conn)
+
+            if res:
+                plan = res[0]
+                if isinstance(plan, str): plan = json.loads(plan)
+                bot.send_message(
+                    message.chat.id,
+                    f"📅 **خطتك الدراسية الحالية مستمرة:**\n\n"
+                    f"📘 المادة: **{md(plan.get('subject', ''))}**\n"
+                    f"📄 الورد اليومي: **{plan.get('daily_quota')} صفحة**\n"
+                    f"⏱️ المدة الكلية: **{plan.get('total_days')} أيام**\n\n"
+                    f"🔔 *التذكير الصباحي والمسائي مفعل.*\n\n"
+                    f"لإلغاء هذه الخطة والبدء بمادة جديدة، أرسل الأمر: `/delete_plan`",
+                    parse_mode="Markdown"
+                )
+            else:
+                plan_states[user_id] = {"step": "PLAN_SUBJECT"}
+                markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+                markup.add("❌ إلغاء العملية")
+                bot.send_message(
+                    message.chat.id,
+                    "📅 **مرحباً بك في المستشار الدراسي الآلي!**\n\n"
+                    "سأنهي لك عشوائية المذاكرة. سأقوم بحساب وردك اليومي وأرسل لك تذكيراً آلياً كل صباح ومساء.\n\n"
+                    "✍️ **أرسل الآن اسم المادة** (مثلاً: تنازع القوانين):",
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
 
         elif text == "📈 تقدمي الدراسي":
             markup = types.InlineKeyboardMarkup()
