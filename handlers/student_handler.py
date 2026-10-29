@@ -494,26 +494,45 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"🎓 **{y_name}**\nالآن اختر الفصل الدراسي الخاص بك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
+        @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
     def handle_set_sem(call):
         _, _, year, sem = call.data.split("_")
         year, sem = int(year), int(sem)
+        user_id = call.from_user.id
+        first_name = call.from_user.first_name or "زميلنا"
+        username = call.from_user.username or ""
+        
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("UPDATE users SET academic_year=%s, academic_semester=%s WHERE user_id=%s", (year, sem, call.from_user.id))
+            # استخدام آلية الإدخال الذكي (UPSERT) لحفظ البيانات حتى لمن لم يضغط /start
+            cur.execute("""
+                INSERT INTO users (user_id, username, first_name, academic_year, academic_semester, join_date)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    academic_year = EXCLUDED.academic_year,
+                    academic_semester = EXCLUDED.academic_semester,
+                    first_name = EXCLUDED.first_name
+            """, (user_id, username, first_name, year, sem))
             conn.commit()
             cur.close()
         except Exception as e:
             conn.rollback()
-        finally: release_db(conn)
+            print("DB Error in set_s:", e)
+        finally: 
+            release_db(conn)
         
         y_name = YEARS.get(year, f"السنة {year}")
         s_name = SEMESTERS.get(sem, f"الفصل {sem}")
-        bot.edit_message_text(f"✅ **تم ضبط إعداداتك بنجاح!**\nسنتك الدراسية: {y_name} - {s_name}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+        
+        try:
+            bot.edit_message_text(f"✅ **تم ضبط إعداداتك بنجاح!**\nسنتك الدراسية: {y_name} - {s_name}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+        except Exception:
+            pass
         
         bot.send_message(call.message.chat.id, "🏠 **حسابك جاهز الآن!**\nاستخدم القائمة السفلية للبدء في التدريب والمنافسة:", reply_markup=get_student_main_keyboard(), parse_mode="Markdown")
         safe_answer_callback(bot, call.id, "✅ تم تحديث بياناتك!", show_alert=True)
+
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("dc_ans_"))
     def handle_daily_challenge_answer(call):
