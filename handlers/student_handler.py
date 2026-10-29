@@ -4,9 +4,13 @@ from database import get_db, release_db, save_session_to_db, load_session_from_d
 from keyboards import get_student_main_keyboard, get_exam_control_keyboard, get_real_exam_control_keyboard
 from utils import md, safe_answer_callback, check_subscription, send_sub_required_msg, is_admin
 import json
+import math
+import datetime
 
-# قاموس خفيف لحفظ حالة البحث بكلمة مفتاحية لكل طالب
+# قواميس حفظ الجلسات للطلاب
 student_search_states = {}
+plan_states = {}
+
 
 def register_student_handlers(bot):
     # ==================== معالج أمر البدء /start ====================
