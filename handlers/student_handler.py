@@ -7,10 +7,9 @@ import json
 import math
 import datetime
 
-# قواميس حفظ الجلسات للطلاب
+# قواميس خفيفة لحفظ حالة الإدخال المؤقت لكل طالب
 student_search_states = {}
 plan_states = {}
-
 
 def register_student_handlers(bot):
     # ==================== معالج أمر البدء /start ====================
@@ -20,7 +19,6 @@ def register_student_handlers(bot):
         username = message.from_user.username or ""
         first_name = message.from_user.first_name or "زميلنا"
 
-        # تسجيل الطالب في قاعدة البيانات إن لم يكن مسجلاً مسبقاً
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -32,7 +30,6 @@ def register_student_handlers(bot):
                     first_name = EXCLUDED.first_name
             """, (user_id, username, first_name))
             
-            # التحقق من سنته الدراسية
             cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
             year = res[0] if res else 0
@@ -44,7 +41,6 @@ def register_student_handlers(bot):
         finally:
             release_db(conn)
 
-        # فحص الاشتراك الإجباري أولاً
         if not check_subscription(bot, user_id):
             return send_sub_required_msg(bot, message.chat.id)
 
@@ -111,13 +107,11 @@ def register_student_handlers(bot):
     ])
     def handle_student_menus(message):
         user_id = message.from_user.id
-        # إلغاء أي حالة بحث معلقة إذا ضغط الطالب على قائمة رئيسية
         student_search_states.pop(user_id, None)
 
         if not check_subscription(bot, user_id):
             return send_sub_required_msg(bot, message.chat.id)
         
-        # حاجز الإعداد الإلزامي: منع الطالب من استخدام البوت قبل تحديد سنته
         conn = get_db()
         try:
             cur = conn.cursor()
@@ -197,7 +191,7 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"fcy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
-      
+
         elif text == "📅 خطة الدراسة":
             conn = get_db()
             try:
@@ -212,15 +206,28 @@ def register_student_handlers(bot):
             if res:
                 plan = res[0]
                 if isinstance(plan, str): plan = json.loads(plan)
+                
+                # حساب النسبة وتوليد شريط التقدم المرئي
+                total_p = plan.get("total_pages", 1)
+                comp_p = plan.get("completed_pages", 0)
+                progress_percent = int((comp_p / total_p) * 100) if total_p > 0 else 0
+                blocks = int(progress_percent / 10)
+                progress_bar = "██" * blocks + "░░" * (10 - blocks)
+
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("▶️ بدء جلسة تركيز", callback_data="start_pomodoro"))
+
                 bot.send_message(
                     message.chat.id,
                     f"📅 **خطتك الدراسية الحالية مستمرة:**\n\n"
                     f"📘 المادة: **{md(plan.get('subject', ''))}**\n"
                     f"📄 الورد اليومي: **{plan.get('daily_quota')} صفحة**\n"
-                    f"⏱️ المدة الكلية: **{plan.get('total_days')} أيام**\n\n"
+                    f"⏱️ المدة الكلية: **{plan.get('total_days')} أيام**\n"
+                    f"📈 التقدم: [{progress_bar}] {progress_percent}%\n\n"
                     f"🔔 *التذكير الصباحي والمسائي مفعل.*\n\n"
                     f"لإلغاء هذه الخطة والبدء بمادة جديدة، أرسل الأمر: `/delete_plan`",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=markup
                 )
             else:
                 plan_states[user_id] = {"step": "PLAN_SUBJECT"}
@@ -311,6 +318,168 @@ def register_student_handlers(bot):
 
         else:
             bot.send_message(message.chat.id, f"🚧 **{text}**\nهذه الميزة قيد البرمجة حالياً ضمن التحديث الاحترافي! ترقبوا إطلاقها قريباً 🚀", parse_mode="Markdown")
+
+    # ==================== معالج إنشاء الخطة الدراسية الذكية ====================
+    @bot.message_handler(func=lambda msg: msg.from_user.id in plan_states and msg.text)
+    def handle_plan_creation(message):
+        user_id = message.from_user.id
+        state = plan_states[user_id]
+        step = state.get("step")
+        text = message.text
+
+        if text == "❌ إلغاء العملية":
+            plan_states.pop(user_id, None)
+            bot.send_message(message.chat.id, "تم إلغاء إعداد الخطة 🛡️", reply_markup=get_student_main_keyboard())
+            return
+
+        if step == "PLAN_SUBJECT":
+            state["subject"] = text
+            state["step"] = "PLAN_PAGES"
+            bot.send_message(message.chat.id, f"📘 المادة: **{text}**\n\n🔢 **كم عدد صفحات المقرر الكلية؟** (رقم فقط):", parse_mode="Markdown")
+        
+        elif step == "PLAN_PAGES":
+            if not text.isdigit(): return bot.send_message(message.chat.id, "⚠️ أرسل رقماً صحيحاً.")
+            state["pages"] = int(text)
+            state["step"] = "PLAN_DAYS"
+            bot.send_message(message.chat.id, "⏱️ **كم يوماً متبقياً للامتحان؟** (رقم فقط):", parse_mode="Markdown")
+        
+        elif step == "PLAN_DAYS":
+            if not text.isdigit() or int(text) <= 0: return bot.send_message(message.chat.id, "⚠️ أرسل عدداً صحيحاً.")
+            state["days"] = int(text)
+            state["step"] = "PLAN_OFF_DAYS"
+            
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+            markup.row("0", "1", "2")
+            markup.row("❌ إلغاء العملية")
+            bot.send_message(message.chat.id, "🛌 **كم يوم استراحة (أو عطلة) تريد في الأسبوع؟**\n(اختر من القائمة أو اكتب الرقم):", parse_mode="Markdown", reply_markup=markup)
+
+        elif step == "PLAN_OFF_DAYS":
+            if not text.isdigit(): return bot.send_message(message.chat.id, "⚠️ أرسل رقماً صحيحاً.")
+            
+            off_days_per_week = int(text)
+            total_days = state["days"]
+            total_pages = state["pages"]
+            subject = state["subject"]
+            
+            total_off_days = (total_days // 7) * off_days_per_week
+            active_days = total_days - total_off_days
+            
+            if active_days <= 0:
+                return bot.send_message(message.chat.id, "⚠️ أيام العطل أكثر من أيام الدراسة! تقليل العطل أو زيادة الأيام.")
+            
+            daily_pages = math.ceil(total_pages / active_days)
+            
+            plan_data = {
+                "subject": subject,
+                "total_pages": total_pages,
+                "completed_pages": 0,
+                "total_days": total_days,
+                "passed_days": 0,
+                "total_off_days": total_off_days,
+                "daily_quota": daily_pages,
+                "start_date": str(datetime.date.today())
+            }
+            
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("INSERT INTO study_plans (user_id, plan_data) VALUES (%s, %s::jsonb) ON CONFLICT (user_id) DO UPDATE SET plan_data=EXCLUDED.plan_data", (user_id, json.dumps(plan_data)))
+                conn.commit()
+                cur.close()
+            except Exception as e:
+                conn.rollback()
+            finally:
+                release_db(conn)
+                
+            plan_states.pop(user_id, None)
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("▶️ بدء جلسة تركيز (25 دقيقة)", callback_data="start_pomodoro"))
+            
+            bot.send_message(
+                message.chat.id,
+                f"✅ **تم تفصيل خطتك التكيفية بنجاح!**\n\n"
+                f"📘 المادة: **{subject}**\n"
+                f"🎯 هدفك اليومي: إنجاز **{daily_pages} صفحة**\n"
+                f"📈 التقدم: [░░░░░░░░░░] 0%\n\n"
+                f"🌅 سأرسل لك هدفك كل صباح في الـ 7:00.\n"
+                f"🌃 وسأتابع إنجازك كل ليلة في الـ 9:00.",
+                parse_mode="Markdown",
+                reply_markup=get_student_main_keyboard()
+            )
+            bot.send_message(message.chat.id, "⏱️ **أدوات المذاكرة:**", reply_markup=markup)
+
+    @bot.message_handler(commands=['delete_plan'])
+    def handle_delete_plan(message):
+        user_id = message.from_user.id
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM study_plans WHERE user_id=%s", (user_id,))
+            conn.commit()
+            cur.close()
+        except Exception:
+            conn.rollback()
+        finally: release_db(conn)
+        bot.reply_to(message, "🗑️ تم حذف خطتك الدراسية السابقة. يمكنك الآن البدء بخطة جديدة لمادة أخرى!")
+
+    # ==================== معالج الاستبيان المسائي (التكيف الديناميكي) ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("chk_"))
+    def handle_nightly_checkin(call):
+        user_id = call.from_user.id
+        percent_str = call.data.split("_")[1]
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT plan_data FROM study_plans WHERE user_id=%s", (user_id,))
+            res = cur.fetchone()
+            if not res:
+                return safe_answer_callback(bot, call.id, "لا توجد خطة نشطة.", show_alert=True)
+            
+            plan = json.loads(res[0]) if isinstance(res[0], str) else res[0]
+            
+            quota = plan.get("daily_quota", 0)
+            completed_today = math.ceil(quota * (int(percent_str) / 100.0))
+            
+            plan["completed_pages"] += completed_today
+            plan["passed_days"] += 1
+            
+            remaining_pages = plan["total_pages"] - plan["completed_pages"]
+            remaining_days = plan["total_days"] - plan["passed_days"] - plan["total_off_days"]
+            
+            if remaining_pages <= 0:
+                cur.execute("DELETE FROM study_plans WHERE user_id=%s", (user_id,))
+                conn.commit()
+                bot.edit_message_text("🎉 **ألف مبروك! لقد أتممت دراسة المقرر بالكامل!**\nأنت جاهز للامتحان، أنصحك بالانتقال الآن إلى (الاختبارات الشاملة).", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+                return safe_answer_callback(bot, call.id)
+                
+            if remaining_days <= 0 and remaining_pages > 0:
+                remaining_days = 1 # لمنع القسمة على صفر في اليوم الأخير
+                
+            # تطبيق المعادلة الرياضية الديناميكية
+            new_quota = math.ceil(remaining_pages / remaining_days)
+            plan["daily_quota"] = new_quota
+            
+            cur.execute("UPDATE study_plans SET plan_data=%s::jsonb WHERE user_id=%s", (json.dumps(plan), user_id))
+            
+            progress_percent = int((plan["completed_pages"] / plan["total_pages"]) * 100)
+            blocks = int(progress_percent / 10)
+            progress_bar = "██" * blocks + "░░" * (10 - blocks)
+            
+            if int(percent_str) == 100:
+                msg = f"🏆 **بطل! أتممت هدفك بالكامل.**\nالتقدم: [{progress_bar}] {progress_percent}%\nاسترح الآن واستعد للغد."
+            elif int(percent_str) >= 50:
+                msg = f"👍 **جهد جيد!**\nتم ترحيل الصفحات المتبقية لمعادلة الغد.\nالتقدم: [{progress_bar}] {progress_percent}%\nهدفك الجديد غداً: **{new_quota} صفحة** للحفاظ على مسارك."
+            else:
+                msg = f"⚠️ **لا تقلق، غداً يوم جديد!**\nتمت إعادة جدولة خطتك لتعويض النقص.\nهدفك الجديد غداً أصبح: **{new_quota} صفحة**."
+                
+            conn.commit()
+            bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+            
+        except Exception as e:
+            conn.rollback()
+        finally: release_db(conn)
 
     # ==================== الإعدادات وتحديث بيانات الطالب ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("set_y_"))
