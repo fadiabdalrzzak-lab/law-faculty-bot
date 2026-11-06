@@ -422,6 +422,38 @@ def register_student_handlers(bot):
             conn.rollback()
         finally: release_db(conn)
         bot.reply_to(message, "🗑️ تم حذف خطتك الدراسية السابقة. يمكنك الآن البدء بخطة جديدة لمادة أخرى!")
+    # ==================== معالج جلسة التركيز (Pomodoro) ====================
+    @bot.callback_query_handler(func=lambda call: call.data == "start_pomodoro")
+    def handle_start_pomodoro(call):
+        user_id = call.from_user.id
+        safe_answer_callback(bot, call.id, "⏱️ بدأت جلسة التركيز (25 دقيقة). بالتوفيق!", show_alert=True)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛑 إنهاء الجلسة واستراحة قصيرة", callback_data="end_pomodoro"))
+        
+        bot.send_message(
+            call.message.chat.id,
+            "🍅 **بدأت جلسة التركيز الآن (25 دقيقة)**\n\n"
+            "• أغلق أي مشتتات.\n"
+            "• ركز بالكامل على وردك اليومي.\n"
+            "• سنلتقي هنا بعد 25 دقيقة لاستراحة قصيرة (5 دقائق).\n\n"
+            "⏳ *الوقت قيد الاحتساب... التركيز في أوجّه!*",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "end_pomodoro")
+    def handle_end_pomodoro(call):
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        safe_answer_callback(bot, call.id, "☕ انتهت الجلسة! خذ استراحة قصيرة لمدة 5 دقائق.", show_alert=True)
+        bot.send_message(
+            call.message.chat.id,
+            "☕ **أحسنت صنعاً!**\nانتهت جلسة التركيز بنجاح. خذ استراحة قصيرة لمدة 5 دقائق لتجديد نشاطك، ثم عد لمتابعة إنجاز وردك اليومي ⚖️🚀",
+            parse_mode="Markdown"
+        )
 
     # ==================== معالج الاستبيان المسائي (التكيف الديناميكي) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("chk_"))
