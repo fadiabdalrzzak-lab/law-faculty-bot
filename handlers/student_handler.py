@@ -495,6 +495,7 @@ def register_student_handlers(bot):
         safe_answer_callback(bot, call.id)
 
         @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
+        @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
     def handle_set_sem(call):
         _, _, year, sem = call.data.split("_")
         year, sem = int(year), int(sem)
