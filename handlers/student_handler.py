@@ -493,9 +493,7 @@ def register_student_handlers(bot):
         y_name = YEARS.get(year, f"السنة {year}")
         bot.edit_message_text(f"🎓 **{y_name}**\nالآن اختر الفصل الدراسي الخاص بك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
-
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
     def handle_set_sem(call):
         _, _, year, sem = call.data.split("_")
         year, sem = int(year), int(sem)
@@ -533,7 +531,6 @@ def register_student_handlers(bot):
         
         bot.send_message(call.message.chat.id, "🏠 **حسابك جاهز الآن!**\nاستخدم القائمة السفلية للبدء في التدريب والمنافسة:", reply_markup=get_student_main_keyboard(), parse_mode="Markdown")
         safe_answer_callback(bot, call.id, "✅ تم تحديث بياناتك!", show_alert=True)
-
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("dc_ans_"))
     def handle_daily_challenge_answer(call):
