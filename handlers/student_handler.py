@@ -529,7 +529,39 @@ def register_student_handlers(bot):
             
         except Exception as e:
             conn.rollback()
+        finally: release_db(conn) 
+            
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("set_edu_"))
+    def handle_set_edu(call):
+        edu_type = call.data.split("_")[2] # 'regular' or 'open'
+        user_id = call.from_user.id
+        username = call.from_user.username or ""
+        first_name = call.from_user.first_name or "زميلنا"
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO users (user_id, username, first_name, education_type, join_date)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    education_type = EXCLUDED.education_type,
+                    first_name = EXCLUDED.first_name
+            """, (user_id, username, first_name, edu_type))
+            conn.commit()
+            cur.close()
+        except Exception:
+            conn.rollback()
         finally: release_db(conn)
+
+        markup = types.InlineKeyboardMarkup()
+        for y_num, y_name in YEARS.items():
+            markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        
+        sys_name = "🏛️ التعليم النظامي" if edu_type == "regular" else "📖 التعليم المفتوح"
+        bot.edit_message_text(f"✅ تم اختيار **{sys_name}**.\n🎓 **الآن اختر سنتك الدراسية:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_answer_callback(bot, call.id)
 
     # ==================== الإعدادات وتحديث بيانات الطالب ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("set_y_"))
