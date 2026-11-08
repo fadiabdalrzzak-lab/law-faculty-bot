@@ -328,12 +328,15 @@ def register_student_handlers(bot):
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, msg, parse_mode="Markdown", reply_markup=markup)
 
-        elif text == "⚙️ إعدادات حسابي":
+                elif text == "⚙️ إعدادات حسابي":
             markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
+            markup.add(
+                types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="set_edu_regular"),
+                types.InlineKeyboardButton("📖 التعليم المفتوح", callback_data="set_edu_open")
+            )
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
-            bot.send_message(message.chat.id, "⚙️ **إعدادات حسابي:**\nتعديل سنتك الدراسية سيغير من إحصائياتك في لوحة الشرف:", parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(message.chat.id, "⚙️ **إعدادات حسابي:**\nيرجى تحديد نظام دراستك أولاً للبدء بضبط السنة:", parse_mode="Markdown", reply_markup=markup)
+
 
         elif text == "💬 الدعم والملاحظات":
             bot.send_message(message.chat.id, "وُلد المشروع ليختصر وقتكم 💙.\nللدعم التقني والمقترحات تواصلوا معي مباشرة:\n👉 @Saqqer10")
