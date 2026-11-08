@@ -25,7 +25,7 @@ def get_user_edu_type(user_id):
 
 def register_student_handlers(bot):
     # ==================== معالج أمر البدء /start ====================
-    @bot.message_handler(commands=['start'])
+      @bot.message_handler(commands=['start'])
     def handle_start(message):
         user_id = message.from_user.id
         username = message.from_user.username or ""
@@ -42,7 +42,8 @@ def register_student_handlers(bot):
                     first_name = EXCLUDED.first_name
             """, (user_id, username, first_name))
             
-            cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
+            # جلب النظام والسنة
+            cur.execute("SELECT academic_year, education_type FROM users WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
             year = res[0] if res else 0
             cur.close()
@@ -63,12 +64,14 @@ def register_student_handlers(bot):
 
         if year == 0:
             markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
+            markup.add(
+                types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="set_edu_regular"),
+                types.InlineKeyboardButton("📖 التعليم المفتوح", callback_data="set_edu_open")
+            )
             bot.send_message(
                 message.chat.id,
                 f"أهلاً بك يا زميلي **{md(first_name)}** في منصة طلاب حقوق دمشق ⚖️✨\n\n"
-                f"لتخصيص تجربتك وعرض الأسئلة المناسبة لسنتك الدراسية، يرجى **اختيار سنتك الدراسية**:",
+                f"لتخصيص تجربتك وعرض الأسئلة المناسبة، يرجى **تحديد نظام دراستك** أولاً:",
                 parse_mode="Markdown",
                 reply_markup=markup
             )
@@ -80,6 +83,7 @@ def register_student_handlers(bot):
                 parse_mode="Markdown",
                 reply_markup=get_student_main_keyboard()
             )
+
 
     # ==================== استقبال المشتركين الجدد (Onboarding) ====================
     @bot.callback_query_handler(func=lambda call: call.data == "check_sub")
