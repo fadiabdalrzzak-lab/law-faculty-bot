@@ -133,22 +133,26 @@ def register_student_handlers(bot):
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
+            cur.execute("SELECT academic_year, education_type FROM users WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
             year = res[0] if res else 0
+            edu_type = res[1] if res else 'regular'
             cur.close()
         except Exception:
-            year = 0
+            year, edu_type = 0, 'regular'
         finally: release_db(conn)
 
-        if year == 0 and message.text != "💬 الدعم والملاحظات":
+        if year == 0 and message.text not in ["💬 الدعم والملاحظات", "⚙️ إعدادات حسابي"]:
             try: bot.delete_message(message.chat.id, message.message_id)
             except Exception: pass
             markup = types.InlineKeyboardMarkup()
-            for y_num, y_name in YEARS.items():
-                markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
-            bot.send_message(message.chat.id, "👋 **أهلاً بك في منصتك الأكاديمية!**\n\nيجب عليك أولاً **تحديد سنتك الدراسية** لتتمكن من استخدام أقسام البوت والمنافسة:", parse_mode="Markdown", reply_markup=markup)
+            markup.add(
+                types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="set_edu_regular"),
+                types.InlineKeyboardButton("📖 التعليم المفتوح", callback_data="set_edu_open")
+            )
+            bot.send_message(message.chat.id, "👋 **أهلاً بك في منصتك الأكاديمية!**\n\nيجب عليك أولاً **تحديد نظام دراستك** لتتمكن من استخدام أقسام البوت:", parse_mode="Markdown", reply_markup=markup)
             return
+
 
         text = message.text
         try: bot.delete_message(message.chat.id, message.message_id)
