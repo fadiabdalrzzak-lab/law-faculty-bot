@@ -328,7 +328,7 @@ def register_student_handlers(bot):
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, msg, parse_mode="Markdown", reply_markup=markup)
 
-                elif text == "⚙️ إعدادات حسابي":
+        elif text == "⚙️ إعدادات حسابي":
             markup = types.InlineKeyboardMarkup()
             markup.add(
                 types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="set_edu_regular"),
