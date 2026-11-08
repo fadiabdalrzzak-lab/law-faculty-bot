@@ -10,6 +10,18 @@ import datetime
 # قواميس خفيفة لحفظ حالة الإدخال المؤقت لكل طالب
 student_search_states = {}
 plan_states = {}
+def get_user_edu_type(user_id):
+    """دالة مساعدة لجلب نظام تعليم الطالب لعزل البيانات"""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT education_type FROM users WHERE user_id=%s", (user_id,))
+        res = cur.fetchone()
+        return res[0] if res and res[0] else 'regular'
+    except:
+        return 'regular'
+    finally:
+        release_db(conn)
 
 def register_student_handlers(bot):
     # ==================== معالج أمر البدء /start ====================
