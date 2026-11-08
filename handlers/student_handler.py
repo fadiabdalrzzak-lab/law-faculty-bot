@@ -172,11 +172,11 @@ def register_student_handlers(bot):
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "⏱️ **محاكاة الاختبارات الشاملة:**\nسيتم توليد امتحان عشوائي من كافة دورات المادة.\nاختر السنة الدراسية:", parse_mode="Markdown", reply_markup=markup)
 
-        elif text == "📚 المكتبة":
+                elif text == "📚 المكتبة":
             conn = get_db()
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT DISTINCT year FROM pdf_files WHERE year IS NOT NULL ORDER BY year ASC")
+                cur.execute("SELECT DISTINCT year FROM pdf_files WHERE year IS NOT NULL AND education_type=%s ORDER BY year ASC", (edu_type,))
                 years = [r[0] for r in cur.fetchall() if r[0] is not None]
                 cur.close()
             except Exception as e:
@@ -184,7 +184,7 @@ def register_student_handlers(bot):
                 years = []
             finally: release_db(conn)
             if not years:
-                bot.send_message(message.chat.id, "📑 لا توجد ملفات في المكتبة حالياً.")
+                bot.send_message(message.chat.id, "📑 لا توجد ملفات في المكتبة تخص نظام دراستك حالياً.")
                 return
             markup = types.InlineKeyboardMarkup()
             for y in years: 
@@ -197,7 +197,7 @@ def register_student_handlers(bot):
             conn = get_db()
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT DISTINCT year FROM flashcards WHERE year IS NOT NULL ORDER BY year ASC")
+                cur.execute("SELECT DISTINCT year FROM flashcards WHERE year IS NOT NULL AND education_type=%s ORDER BY year ASC", (edu_type,))
                 years = [r[0] for r in cur.fetchall() if r[0] is not None]
                 cur.close()
             except Exception as e:
@@ -205,7 +205,7 @@ def register_student_handlers(bot):
                 years = []
             finally: release_db(conn)
             if not years:
-                bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة حالياً. ترقبها قريباً!")
+                bot.send_message(message.chat.id, "🧠 لا توجد بطاقات تعليمية مضافة لنظام دراستك حالياً. ترقبها قريباً!")
                 return
             markup = types.InlineKeyboardMarkup()
             for y in years: 
@@ -213,6 +213,7 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"fcy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
+
 
         elif text == "📅 خطة الدراسة":
             conn = get_db()
