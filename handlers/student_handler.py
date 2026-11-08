@@ -25,7 +25,7 @@ def get_user_edu_type(user_id):
 
 def register_student_handlers(bot):
     # ==================== معالج أمر البدء /start ====================
-      @bot.message_handler(commands=['start'])
+       @bot.message_handler(commands=['start'])
     def handle_start(message):
         user_id = message.from_user.id
         username = message.from_user.username or ""
@@ -83,6 +83,7 @@ def register_student_handlers(bot):
                 parse_mode="Markdown",
                 reply_markup=get_student_main_keyboard()
             )
+
 
 
     # ==================== استقبال المشتركين الجدد (Onboarding) ====================
