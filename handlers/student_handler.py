@@ -171,8 +171,7 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"exm_yr_{y_num}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "⏱️ **محاكاة الاختبارات الشاملة:**\nسيتم توليد امتحان عشوائي من كافة دورات المادة.\nاختر السنة الدراسية:", parse_mode="Markdown", reply_markup=markup)
-
-                elif text == "📚 المكتبة":
+        elif text == "📚 المكتبة":
             conn = get_db()
             try:
                 cur = conn.cursor()
