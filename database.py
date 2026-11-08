@@ -29,6 +29,7 @@ def init_db():
                 xp_points INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
                 academic_year INTEGER DEFAULT 0,
                 academic_semester INTEGER DEFAULT 0,
+                education_type TEXT DEFAULT 'regular',
                 current_streak INTEGER DEFAULT 0,
                 last_active_date DATE,
                 join_date TIMESTAMP DEFAULT NOW()
@@ -38,34 +39,36 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_year INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS academic_semester INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS education_type TEXT DEFAULT 'regular';")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_streak INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_date DATE;")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS questions (
                 id SERIAL PRIMARY KEY, year INTEGER NOT NULL, semester INTEGER NOT NULL DEFAULT 1,
+                education_type TEXT DEFAULT 'regular',
                 subject TEXT NOT NULL, exam_session TEXT NOT NULL, question_text TEXT NOT NULL,
                 option_a TEXT NOT NULL, option_b TEXT NOT NULL, option_c TEXT NOT NULL, option_d TEXT NOT NULL,
                 correct_option TEXT NOT NULL, explanation TEXT,
                 wrong_count INTEGER DEFAULT 0
             );
         """)
-        # التأكد من وجود عمود التكييف القانوني وعداد الفخاخ في حال كان الجدول منشأً مسبقاً
+        cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS education_type TEXT DEFAULT 'regular';")
         cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS explanation TEXT;")
         cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS wrong_count INTEGER DEFAULT 0;")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pdf_files (
                 id SERIAL PRIMARY KEY, title TEXT NOT NULL, file_id TEXT NOT NULL,
-                year INTEGER, semester INTEGER, subject TEXT, doc_type TEXT DEFAULT 'ملف'
+                year INTEGER, semester INTEGER, education_type TEXT DEFAULT 'regular', subject TEXT, doc_type TEXT DEFAULT 'ملف'
             );
         """)
+        cur.execute("ALTER TABLE pdf_files ADD COLUMN IF NOT EXISTS education_type TEXT DEFAULT 'regular';")
 
         cur.execute("CREATE TABLE IF NOT EXISTS saved_questions (user_id BIGINT, question_id INTEGER, PRIMARY KEY (user_id, question_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_flashcards (user_id BIGINT, flashcard_id INTEGER, PRIMARY KEY (user_id, flashcard_id));")
         cur.execute("CREATE TABLE IF NOT EXISTS saved_pdfs (user_id BIGINT, pdf_id INTEGER, PRIMARY KEY (user_id, pdf_id));")
 
-        # جدول حقيبة الأخطاء الشخصية للطالب (مراجعة ليلة الامتحان)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_mistakes (
                 user_id BIGINT,
@@ -91,6 +94,7 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 year INTEGER DEFAULT 1,
                 semester INTEGER DEFAULT 1,
+                education_type TEXT DEFAULT 'regular',
                 subject TEXT NOT NULL,
                 front_text TEXT NOT NULL,
                 back_text TEXT NOT NULL
@@ -98,6 +102,7 @@ def init_db():
         """)
         cur.execute("ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS year INTEGER DEFAULT 1;")
         cur.execute("ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS semester INTEGER DEFAULT 1;")
+        cur.execute("ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS education_type TEXT DEFAULT 'regular';")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS study_plans (
