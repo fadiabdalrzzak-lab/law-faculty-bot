@@ -60,6 +60,12 @@ def show_mng_questions_page(bot, chat_id, edu_type, year_num, sem_num, sub_idx, 
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
 def register_admin_handlers(bot):
+    @bot.message_handler(commands=['admin'])
+    def show_admin_panel(message):
+        if is_admin(message.from_user.id):
+            bot.send_message(message.chat.id, "⚙️ أهلاً بك في لوحة تحكم المشرفين:", reply_markup=get_admin_main_keyboard())
+        else:
+            bot.send_message(message.chat.id, "⚠️ عذراً، هذه اللوحة مخصصة للمشرفين فقط.")
 
     @bot.message_handler(func=lambda msg: is_admin(msg.from_user.id) and msg.text in ["❌ إلغاء العملية", "🏠 القائمة الرئيسية"])
     def cancel_admin_action(message):
