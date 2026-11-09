@@ -10,6 +10,7 @@ import datetime
 # قواميس خفيفة لحفظ حالة الإدخال المؤقت لكل طالب
 student_search_states = {}
 plan_states = {}
+
 def get_user_edu_type(user_id):
     """دالة مساعدة لجلب نظام تعليم الطالب لعزل البيانات"""
     conn = get_db()
@@ -84,9 +85,6 @@ def register_student_handlers(bot):
                 reply_markup=get_student_main_keyboard()
             )
 
-
-
-
     # ==================== استقبال المشتركين الجدد (Onboarding) ====================
     @bot.callback_query_handler(func=lambda call: call.data == "check_sub")
     def handle_check_sub(call):
@@ -108,9 +106,11 @@ def register_student_handlers(bot):
 
             if year == 0:
                 markup = types.InlineKeyboardMarkup()
-                for y_num, y_name in YEARS.items():
-                    markup.add(types.InlineKeyboardButton(y_name, callback_data=f"set_y_{y_num}"))
-                bot.send_message(call.message.chat.id, "🎉 **تم التحقق من اشتراكك بنجاح!**\n\nلتخصيص تجربتك (كالسؤال اليومي ومنافسة دفعتك)، يرجى **اختيار سنتك الدراسية**:", parse_mode="Markdown", reply_markup=markup)
+                markup.add(
+                    types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="set_edu_regular"),
+                    types.InlineKeyboardButton("📖 التعليم المفتوح", callback_data="set_edu_open")
+                )
+                bot.send_message(call.message.chat.id, "🎉 **تم التحقق من اشتراكك بنجاح!**\n\nلتخصيص تجربتك، يرجى **اختيار نظام دراستك**:", parse_mode="Markdown", reply_markup=markup)
             else:
                 bot.send_message(call.message.chat.id, "✅ **تم التحقق! أهلاً بك مجدداً.**", reply_markup=get_student_main_keyboard())
         else:
@@ -153,7 +153,6 @@ def register_student_handlers(bot):
             bot.send_message(message.chat.id, "👋 **أهلاً بك في منصتك الأكاديمية!**\n\nيجب عليك أولاً **تحديد نظام دراستك** لتتمكن من استخدام أقسام البوت:", parse_mode="Markdown", reply_markup=markup)
             return
 
-
         text = message.text
         try: bot.delete_message(message.chat.id, message.message_id)
         except Exception: pass
@@ -171,6 +170,7 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"exm_yr_{y_num}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "⏱️ **محاكاة الاختبارات الشاملة:**\nسيتم توليد امتحان عشوائي من كافة دورات المادة.\nاختر السنة الدراسية:", parse_mode="Markdown", reply_markup=markup)
+            
         elif text == "📚 المكتبة":
             conn = get_db()
             try:
@@ -212,7 +212,6 @@ def register_student_handlers(bot):
                 markup.add(types.InlineKeyboardButton(y_name, callback_data=f"fcy_{y}"))
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "🧠 **البطاقات التعليمية (Flashcards):**\nاختر السنة الدراسية لمراجعة المصطلحات:", parse_mode="Markdown", reply_markup=markup)
-
 
         elif text == "📅 خطة الدراسة":
             conn = get_db()
@@ -337,7 +336,6 @@ def register_student_handlers(bot):
             markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
             bot.send_message(message.chat.id, "⚙️ **إعدادات حسابي:**\nيرجى تحديد نظام دراستك أولاً للبدء بضبط السنة:", parse_mode="Markdown", reply_markup=markup)
 
-
         elif text == "💬 الدعم والملاحظات":
             bot.send_message(message.chat.id, "وُلد المشروع ليختصر وقتكم 💙.\nللدعم التقني والمقترحات تواصلوا معي مباشرة:\n👉 @Saqqer10")
 
@@ -447,6 +445,7 @@ def register_student_handlers(bot):
             conn.rollback()
         finally: release_db(conn)
         bot.reply_to(message, "🗑️ تم حذف خطتك الدراسية السابقة. يمكنك الآن البدء بخطة جديدة لمادة أخرى!")
+
     # ==================== معالج جلسة التركيز (Pomodoro) ====================
     @bot.callback_query_handler(func=lambda call: call.data == "start_pomodoro")
     def handle_start_pomodoro(call):
@@ -536,8 +535,8 @@ def register_student_handlers(bot):
             
         except Exception as e:
             conn.rollback()
-        finally: release_db(conn) 
-            
+        finally: release_db(conn)
+
     @bot.callback_query_handler(func=lambda call: call.data.startswith("set_edu_"))
     def handle_set_edu(call):
         edu_type = call.data.split("_")[2] # 'regular' or 'open'
@@ -582,6 +581,7 @@ def register_student_handlers(bot):
         y_name = YEARS.get(year, f"السنة {year}")
         bot.edit_message_text(f"🎓 **{y_name}**\nالآن اختر الفصل الدراسي الخاص بك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
+
     @bot.callback_query_handler(func=lambda call: call.data.startswith("set_s_"))
     def handle_set_sem(call):
         _, _, year, sem = call.data.split("_")
@@ -593,7 +593,6 @@ def register_student_handlers(bot):
         conn = get_db()
         try:
             cur = conn.cursor()
-            # استخدام آلية الإدخال الذكي (UPSERT) لحفظ البيانات حتى لمن لم يضغط /start
             cur.execute("""
                 INSERT INTO users (user_id, username, first_name, academic_year, academic_semester, join_date)
                 VALUES (%s, %s, %s, %s, %s, NOW())
@@ -736,7 +735,7 @@ def register_student_handlers(bot):
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_stats"))
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
-        
+
     @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
     def handle_leaderboard(call):
         user_id = call.from_user.id
@@ -816,7 +815,6 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"🏋️ **تدريب مكثف (معالجة الضعف):**\n📖 المادة: **{md(subject_name)}**\nاختر الدورة للبدء بتقوية نقطة ضعفك ورفع نسبتك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-
     # ==================== التنقل في المحاكاة (الاختبار الشامل) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_yr_"))
     def handle_exm_year(call):
@@ -864,6 +862,7 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"📚 **المواد:**\nاختر المادة لتوليد امتحان شامل عشوائي:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
+    # ==================== بدء الجلسات ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("ss_"))
     def handle_session_selection(call):
         parts = call.data.split("_")
@@ -933,8 +932,6 @@ def register_student_handlers(bot):
         
         from handlers.exam_handler import send_current_question
         send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
-
-
 
     # ==================== التنقل العام (مواد، دورات، وأدوات المادة الذكية) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
@@ -1032,80 +1029,6 @@ def register_student_handlers(bot):
         bot.edit_message_text(msg_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-
-
-    # ==================== الميزة 1: حقيبة أخطائي (مراجعة ليلة الامتحان) ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("mstk_"))
-    def handle_user_mistakes_bag(call):
-        user_id = call.from_user.id
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = map(int, parts[1:4])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
-            subjects = cur.fetchall()
-            if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
-            subject_name = subjects[sub_idx][0]
-
-            cur.execute("""
-                SELECT q.id FROM questions q
-                JOIN user_mistakes m ON q.id = m.question_id
-                WHERE m.user_id=%s AND q.year=%s AND q.semester=%s AND q.subject=%s
-                ORDER BY m.added_at DESC
-            """, (user_id, year_num, sem_num, subject_name))
-            q_ids = [r[0] for r in cur.fetchall()]
-            cur.close()
-        except Exception:
-            conn.rollback()
-            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
-        finally: release_db(conn)
-
-        if not q_ids:
-            return safe_answer_callback(bot, call.id, "🎉 حقيبة أخطائك فارغة في هذه المادة! ليس لديك أي أخطاء مسجلة حالياً.", show_alert=True)
-
-        save_session_to_db(user_id, {
-            "question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [],
-            "subject": subject_name, "session_name": "🎯 حقيبة أخطائي", "quiz_type": "training"
-        })
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception: pass
-        safe_answer_callback(bot, call.id, "🎯 بدأ تدريب حقيبة الأخطاء!")
-        bot.send_message(
-            call.message.chat.id, 
-            f"🎯 **حقيبة أخطائي — {md(subject_name)}**\n"
-            f"📝 عدد الأسئلة: **{len(q_ids)}**\n"
-            f"💡 *كل سؤال تجيب عليه بشكل صحيح سيُحذف تلقائياً من حقيبة أخطائك!*", 
-            parse_mode="Markdown", 
-            reply_markup=get_exam_control_keyboard()
-        )
-        from handlers.exam_handler import send_current_question
-        send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
-
-    # ==================== الميزة 2: رادار الفخاخ (أصعب أسئلة المادة) ====================
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("trp_"))
-    def handle_traps_radar(call):
-        user_id = call.from_user.id
-        parts = call.data.split("_")
-        year_num, sem_num, sub_idx = map(int, parts[1:4])
-        conn = get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
-            subjects = cur.fetchall()
-            if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
-            subject_name = subjects[sub_idx][0]
-
-            # جلب أكثر 20 سؤالاً أخطأ فيها الطلاب، وإذا لم تتوفر أخطاء بعد يجلب 20 سؤالاً مختاراً
-            cur.execute("""
-                SELECT id FROM questions 
-                WHERE year=%s AND semester=%s AND subject=%s AND COALESCE(wrong_count, 0) > 0
-                ORDER BY wrong_count DESC, id ASC LIMIT 20
-            """, (year_num, sem_num, subject_name))
-            q_ids = [r[0] for r in cur.fetchall()]
-            cur.close()
-        except Exception:
-            conn.rollback()
     # ==================== الميزة 1: حقيبة أخطائي (مراجعة ليلة الامتحان) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("mstk_"))
     def handle_user_mistakes_bag(call):
@@ -1294,7 +1217,6 @@ def register_student_handlers(bot):
         from handlers.exam_handler import send_current_question
         send_current_question(bot, message.chat.id, user_id, load_session_from_db(user_id))
 
-
     # ==================== قسم المكتبة (PDF) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
     def handle_pdf_year(call):
@@ -1377,7 +1299,6 @@ def register_student_handlers(bot):
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
         bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
-
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("getpdf_"))
     def handle_get_pdf(call):
@@ -1604,7 +1525,6 @@ def register_student_handlers(bot):
         if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
         send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id)
-
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcdel_"))
     def handle_fc_delete(call):
