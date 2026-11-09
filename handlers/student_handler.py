@@ -940,10 +940,11 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("yr_"))
     def handle_year_selection(call):
         year_num = int(call.data.split("_")[1])
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
+            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND education_type=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num, edu_type))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
         except Exception as e:
@@ -964,10 +965,11 @@ def register_student_handlers(bot):
     def handle_semester_selection(call):
         _, year_num, sem_num = call.data.split("_")
         year_num, sem_num = int(year_num), int(sem_num)
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -984,27 +986,27 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("sb_"))
     def handle_subject_selection(call):
         user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         student_search_states.pop(user_id, None)
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ في التحديد", show_alert=True)
             subject_name = subjects[sub_idx][0]
             
-            cur.execute("SELECT exam_session, COUNT(id) FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
+            cur.execute("SELECT exam_session, COUNT(id) FROM questions WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name, edu_type))
             sessions = cur.fetchall()
 
-            # حساب عدد أخطاء الطالب المسجلة في هذه المادة
             cur.execute("""
                 SELECT COUNT(m.question_id) 
                 FROM user_mistakes m 
                 JOIN questions q ON m.question_id = q.id 
-                WHERE m.user_id=%s AND q.year=%s AND q.semester=%s AND q.subject=%s
-            """, (user_id, year_num, sem_num, subject_name))
+                WHERE m.user_id=%s AND q.year=%s AND q.semester=%s AND q.subject=%s AND q.education_type=%s
+            """, (user_id, year_num, sem_num, subject_name, edu_type))
             mistake_cnt = cur.fetchone()[0]
             cur.close()
         except Exception as e:
@@ -1013,14 +1015,12 @@ def register_student_handlers(bot):
         finally: release_db(conn)
 
         markup = types.InlineKeyboardMarkup()
-        # 1. شريط الأدوات الذكية للمادة (حقيبة الأخطاء + رادار الفخاخ + البحث)
         markup.row(
             types.InlineKeyboardButton(f"🎯 حقيبة أخطائي ({mistake_cnt})", callback_data=f"mstk_{year_num}_{sem_num}_{sub_idx}"),
             types.InlineKeyboardButton("💣 رادار الفخاخ", callback_data=f"trp_{year_num}_{sem_num}_{sub_idx}")
         )
         markup.add(types.InlineKeyboardButton("🔍 بحث بكلمة مفتاحية في المادة", callback_data=f"srch_{year_num}_{sem_num}_{sub_idx}"))
 
-        # 2. قائمة الدورات الامتحانية
         for s_idx, (sess, cnt) in enumerate(sessions):
             markup.add(types.InlineKeyboardButton(f"🗓️ {sess} ({cnt} سؤال)", callback_data=f"ss_{year_num}_{sem_num}_{sub_idx}_{s_idx}"))
         markup.add(types.InlineKeyboardButton("🔙 رجوع للمواد", callback_data=f"sem_{year_num}_{sem_num}"))
@@ -1031,6 +1031,8 @@ def register_student_handlers(bot):
         )
         bot.edit_message_text(msg_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
+
+
 
     # ==================== الميزة 1: حقيبة أخطائي (مراجعة ليلة الامتحان) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("mstk_"))
