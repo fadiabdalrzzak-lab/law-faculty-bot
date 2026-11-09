@@ -1299,10 +1299,11 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
     def handle_pdf_year(call):
         year_num = int(call.data.split("_")[1])
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM pdf_files WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
+            cur.execute("SELECT DISTINCT semester FROM pdf_files WHERE year=%s AND education_type=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num, edu_type))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
         except Exception as e:
@@ -1323,10 +1324,11 @@ def register_student_handlers(bot):
     def handle_pdf_semester(call):
         _, year_num, sem_num = call.data.split("_")
         year_num, sem_num = int(year_num), int(sem_num)
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject, COUNT(*) FROM pdf_files WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -1346,15 +1348,17 @@ def register_student_handlers(bot):
     def handle_pdf_subject(call):
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT subject FROM pdf_files WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT DISTINCT subject FROM pdf_files WHERE year=%s AND semester=%s AND education_type=%s ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ في الاختيار", show_alert=True)
             subject_name = subjects[sub_idx][0]
             
-            cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s ORDER BY id DESC", (year_num, sem_num, subject_name))
+            cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s ORDER BY id DESC", (year_num, sem_num, subject_name, edu_type))
             pdfs = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -1367,12 +1371,13 @@ def register_student_handlers(bot):
                 types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{pdf_id}"),
                 types.InlineKeyboardButton("🔖 حفظ", callback_data=f"savepdf_{pdf_id}")
             ]
-            if is_admin(call.from_user.id): 
+            if is_admin(user_id): 
                 row.append(types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{pdf_id}_{year_num}_{sem_num}_{sub_idx}"))
             markup.row(*row)
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
         bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
+
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("getpdf_"))
     def handle_get_pdf(call):
