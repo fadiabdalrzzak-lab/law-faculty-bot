@@ -821,10 +821,11 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_yr_"))
     def handle_exm_year(call):
         year_num = int(call.data.split("_")[2])
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
+            cur.execute("SELECT DISTINCT semester FROM questions WHERE year=%s AND education_type=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num, edu_type))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
         except Exception as e:
@@ -845,10 +846,11 @@ def register_student_handlers(bot):
     def handle_exm_semester(call):
         _, _, year_num, sem_num = call.data.split("_")
         year_num, sem_num = int(year_num), int(sem_num)
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject, COUNT(*) as cnt FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -862,25 +864,26 @@ def register_student_handlers(bot):
         bot.edit_message_text(f"📚 **المواد:**\nاختر المادة لتوليد امتحان شامل عشوائي:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    # ==================== بدء الجلسات ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("ss_"))
     def handle_session_selection(call):
         parts = call.data.split("_")
         year_num, sem_num, sub_idx, sess_idx = map(int, parts[1:5])
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ في رقم المادة", show_alert=True)
             subject_name = subjects[sub_idx][0]
             
-            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
+            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name, edu_type))
             sessions = cur.fetchall()
             if sess_idx >= len(sessions): return safe_answer_callback(bot, call.id, "❌ خطأ في رقم الدورة", show_alert=True)
             session_name = sessions[sess_idx][0]
             
-            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s ORDER BY id ASC", (year_num, sem_num, subject_name, session_name))
+            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND exam_session=%s AND education_type=%s ORDER BY id ASC", (year_num, sem_num, subject_name, session_name, edu_type))
             q_ids = [r[0] for r in cur.fetchall()]
             cur.close()
         except Exception as e:
@@ -888,7 +891,6 @@ def register_student_handlers(bot):
             return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
-        user_id = call.from_user.id
         save_session_to_db(user_id, {"question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [], "subject": subject_name, "session_name": session_name, "quiz_type": "training"})
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception: pass
@@ -902,15 +904,17 @@ def register_student_handlers(bot):
     def handle_random_exam(call):
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ، يرجى تحديث القائمة.", show_alert=True)
             subject_name = subjects[sub_idx][0]
             
-            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s ORDER BY RANDOM() LIMIT 50", (year_num, sem_num, subject_name))
+            cur.execute("SELECT id FROM questions WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s ORDER BY RANDOM() LIMIT 50", (year_num, sem_num, subject_name, edu_type))
             q_ids = [r[0] for r in cur.fetchall()]
             cur.close()
         except Exception as e:
@@ -918,7 +922,6 @@ def register_student_handlers(bot):
             return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
-        user_id = call.from_user.id
         if not q_ids: return safe_answer_callback(bot, call.id, "⚠️ لا توجد أسئلة كافية.", show_alert=True)
         
         save_session_to_db(user_id, {"question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [], "subject": subject_name, "session_name": "محاكاة امتحان شامل", "quiz_type": "exam", "answered_dict": {}})
@@ -930,6 +933,7 @@ def register_student_handlers(bot):
         
         from handlers.exam_handler import send_current_question
         send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
+
 
 
     # ==================== التنقل العام (مواد، دورات، وأدوات المادة الذكية) ====================
