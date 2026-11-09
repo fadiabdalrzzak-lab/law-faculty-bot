@@ -736,8 +736,8 @@ def register_student_handlers(bot):
         markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_stats"))
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
-
-        @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
+        
+    @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
     def handle_leaderboard(call):
         user_id = call.from_user.id
         conn = get_db()
