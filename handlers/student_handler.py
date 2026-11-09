@@ -1513,10 +1513,11 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcy_"))
     def handle_fc_year(call):
         year_num = int(call.data.split("_")[1])
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num,))
+            cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s AND education_type=%s AND semester IS NOT NULL ORDER BY semester ASC", (year_num, edu_type))
             semesters = [r[0] for r in cur.fetchall() if r[0] is not None]
             cur.close()
         except Exception as e:
@@ -1537,10 +1538,11 @@ def register_student_handlers(bot):
     def handle_fc_semester(call):
         _, year_num, sem_num = call.data.split("_")
         year_num, sem_num = int(year_num), int(sem_num)
+        edu_type = get_user_edu_type(call.from_user.id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject, COUNT(*) FROM flashcards WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject, COUNT(*) FROM flashcards WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -1558,15 +1560,16 @@ def register_student_handlers(bot):
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
         user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT subject FROM flashcards WHERE year=%s AND semester=%s ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT DISTINCT subject FROM flashcards WHERE year=%s AND semester=%s AND education_type=%s ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ في القائمة", show_alert=True)
             subject_name = subjects[sub_idx][0]
             
-            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE year=%s AND semester=%s AND subject=%s ORDER BY id ASC", (year_num, sem_num, subject_name))
+            cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s ORDER BY id ASC", (year_num, sem_num, subject_name, edu_type))
             cards = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -1584,13 +1587,14 @@ def register_student_handlers(bot):
         show_back = int(parts[2]) == 1
         subject_name = "_".join(parts[3:])
         user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
             if subject_name == "البطاقات المحفوظة":
                 cur.execute("SELECT f.id, f.front_text, f.back_text FROM flashcards f JOIN saved_flashcards s ON f.id = s.flashcard_id WHERE s.user_id = %s ORDER BY f.id ASC", (user_id,))
             else:
-                cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s ORDER BY id ASC", (subject_name,))
+                cur.execute("SELECT id, front_text, back_text FROM flashcards WHERE subject=%s AND education_type=%s ORDER BY id ASC", (subject_name, edu_type))
             cards = cur.fetchall()
             cur.close()
         except Exception as e:
@@ -1600,6 +1604,7 @@ def register_student_handlers(bot):
         if not cards or idx >= len(cards) or idx < 0: return safe_answer_callback(bot, call.id, "انتهت البطاقات.", show_alert=True)
         send_flashcard(bot, call.message.chat.id, user_id, cards, idx, show_back, message_id=call.message.message_id, subject=subject_name)
         safe_answer_callback(bot, call.id)
+
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcdel_"))
     def handle_fc_delete(call):
