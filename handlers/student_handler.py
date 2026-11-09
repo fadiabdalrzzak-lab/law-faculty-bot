@@ -737,36 +737,37 @@ def register_student_handlers(bot):
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
 
-    @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
+        @bot.callback_query_handler(func=lambda call: call.data == "show_leaderboard")
     def handle_leaderboard(call):
         user_id = call.from_user.id
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT academic_year FROM users WHERE user_id=%s", (user_id,))
+            cur.execute("SELECT academic_year, education_type FROM users WHERE user_id=%s", (user_id,))
             res = cur.fetchone()
-            year = res[0] if res and res[0] else 0
+            year, edu_type = res if res else (0, 'regular')
 
             if year == 0:
                 cur.close()
                 release_db(conn)
                 return safe_answer_callback(bot, call.id, "⚠️ يرجى تحديد سنتك الدراسية من (⚙️ إعدادات حسابي) أولاً لتتمكن من المنافسة!", show_alert=True)
 
-            cur.execute("SELECT first_name, xp_points FROM users WHERE academic_year=%s AND xp_points > 0 ORDER BY xp_points DESC LIMIT 10", (year,))
+            cur.execute("SELECT first_name, xp_points FROM users WHERE academic_year=%s AND education_type=%s AND xp_points > 0 ORDER BY xp_points DESC LIMIT 10", (year, edu_type))
             top_users = cur.fetchall()
 
-            cur.execute("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY xp_points DESC) as rank FROM users WHERE academic_year=%s AND xp_points > 0) as ranked WHERE user_id=%s", (year, user_id))
+            cur.execute("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY xp_points DESC) as rank FROM users WHERE academic_year=%s AND education_type=%s AND xp_points > 0) as ranked WHERE user_id=%s", (year, edu_type, user_id))
             rank_res = cur.fetchone()
             user_rank = rank_res[0] if rank_res else "غير محدد"
             cur.close()
         except Exception as e:
             conn.rollback()
-            top_users, year, user_rank = [], 0, "غير محدد"
+            top_users, year, user_rank, edu_type = [], 0, "غير محدد", 'regular'
         finally: release_db(conn)
 
         y_name = YEARS.get(year, f"السنة {year}")
+        sys_name = "النظامي" if edu_type == "regular" else "المفتوح"
         
-        msg = f"🏆 **لوحة الشرف - {y_name}**\n\n"
+        msg = f"🏆 **لوحة الشرف - {y_name} ({sys_name})**\n\n"
         if not top_users:
             msg += "لا توجد نقاط مسجلة في هذه الدفعة بعد. كن الأول!"
         else:
@@ -785,19 +786,21 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("trainow_"))
     def handle_train_now(call):
         subject_name = call.data.split("_", 1)[1]
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT year, semester FROM questions WHERE subject=%s LIMIT 1", (subject_name,))
+            cur.execute("SELECT year, semester FROM questions WHERE subject=%s AND education_type=%s LIMIT 1", (subject_name, edu_type))
             res = cur.fetchone()
             if not res: return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
             year_num, sem_num = res
 
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             all_subs = [r[0] for r in cur.fetchall()]
             sub_idx = all_subs.index(subject_name) if subject_name in all_subs else 0
 
-            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name))
+            cur.execute("SELECT exam_session FROM questions WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s GROUP BY exam_session ORDER BY MAX(id) DESC", (year_num, sem_num, subject_name, edu_type))
             sessions = [r[0] for r in cur.fetchall()]
             cur.close()
         except Exception as e:
@@ -812,6 +815,7 @@ def register_student_handlers(bot):
 
         bot.edit_message_text(f"🏋️ **تدريب مكثف (معالجة الضعف):**\n📖 المادة: **{md(subject_name)}**\nاختر الدورة للبدء بتقوية نقطة ضعفك ورفع نسبتك:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         safe_answer_callback(bot, call.id)
+
 
     # ==================== التنقل في المحاكاة (الاختبار الشامل) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("exm_yr_"))
