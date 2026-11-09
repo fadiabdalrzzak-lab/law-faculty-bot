@@ -1106,6 +1106,79 @@ def register_student_handlers(bot):
             cur.close()
         except Exception:
             conn.rollback()
+    # ==================== الميزة 1: حقيبة أخطائي (مراجعة ليلة الامتحان) ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("mstk_"))
+    def handle_user_mistakes_bag(call):
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
+        parts = call.data.split("_")
+        year_num, sem_num, sub_idx = map(int, parts[1:4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
+            subjects = cur.fetchall()
+            if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
+            subject_name = subjects[sub_idx][0]
+
+            cur.execute("""
+                SELECT q.id FROM questions q
+                JOIN user_mistakes m ON q.id = m.question_id
+                WHERE m.user_id=%s AND q.year=%s AND q.semester=%s AND q.subject=%s AND q.education_type=%s
+                ORDER BY m.added_at DESC
+            """, (user_id, year_num, sem_num, subject_name, edu_type))
+            q_ids = [r[0] for r in cur.fetchall()]
+            cur.close()
+        except Exception:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
+        finally: release_db(conn)
+
+        if not q_ids:
+            return safe_answer_callback(bot, call.id, "🎉 حقيبة أخطائك فارغة في هذه المادة! ليس لديك أي أخطاء مسجلة حالياً.", show_alert=True)
+
+        save_session_to_db(user_id, {
+            "question_ids": q_ids, "index": 0, "correct_count": 0, "wrong_count": 0, "answered": [],
+            "subject": subject_name, "session_name": "🎯 حقيبة أخطائي", "quiz_type": "training"
+        })
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception: pass
+        safe_answer_callback(bot, call.id, "🎯 بدأ تدريب حقيبة الأخطاء!")
+        bot.send_message(
+            call.message.chat.id, 
+            f"🎯 **حقيبة أخطائي — {md(subject_name)}**\n"
+            f"📝 عدد الأسئلة: **{len(q_ids)}**\n"
+            f"💡 *كل سؤال تجيب عليه بشكل صحيح سيُحذف تلقائياً من حقيبة أخطائك!*", 
+            parse_mode="Markdown", 
+            reply_markup=get_exam_control_keyboard()
+        )
+        from handlers.exam_handler import send_current_question
+        send_current_question(bot, call.message.chat.id, user_id, load_session_from_db(user_id))
+
+    # ==================== الميزة 2: رادار الفخاخ (أصعب أسئلة المادة) ====================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("trp_"))
+    def handle_traps_radar(call):
+        user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
+        parts = call.data.split("_")
+        year_num, sem_num, sub_idx = map(int, parts[1:4])
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
+            subjects = cur.fetchall()
+            if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
+            subject_name = subjects[sub_idx][0]
+
+            cur.execute("""
+                SELECT id FROM questions 
+                WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s AND COALESCE(wrong_count, 0) > 0
+                ORDER BY wrong_count DESC, id ASC LIMIT 20
+            """, (year_num, sem_num, subject_name, edu_type))
+            q_ids = [r[0] for r in cur.fetchall()]
+            cur.close()
+        except Exception:
+            conn.rollback()
             return safe_answer_callback(bot, call.id, "❌ خطأ في السيرفر", show_alert=True)
         finally: release_db(conn)
 
@@ -1133,12 +1206,13 @@ def register_student_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("srch_"))
     def handle_search_prompt(call):
         user_id = call.from_user.id
+        edu_type = get_user_edu_type(user_id)
         parts = call.data.split("_")
         year_num, sem_num, sub_idx = map(int, parts[1:4])
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num))
+            cur.execute("SELECT subject FROM questions WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject ASC", (year_num, sem_num, edu_type))
             subjects = cur.fetchall()
             if sub_idx >= len(subjects): return safe_answer_callback(bot, call.id, "❌ خطأ", show_alert=True)
             subject_name = subjects[sub_idx][0]
@@ -1149,7 +1223,7 @@ def register_student_handlers(bot):
         finally: release_db(conn)
 
         student_search_states[user_id] = {
-            "year": year_num, "semester": sem_num, "sub_idx": sub_idx, "subject": subject_name
+            "year": year_num, "semester": sem_num, "sub_idx": sub_idx, "subject": subject_name, "edu_type": edu_type
         }
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 إلغاء والعودة للمادة", callback_data=f"sb_{year_num}_{sem_num}_{sub_idx}"))
@@ -1176,7 +1250,7 @@ def register_student_handlers(bot):
             bot.reply_to(message, "⚠️ يرجى كتابة كلمة من حرفين على الأقل للبحث.")
             return
 
-        year_num, sem_num, sub_idx, subject_name = state["year"], state["semester"], state["sub_idx"], state["subject"]
+        year_num, sem_num, sub_idx, subject_name, edu_type = state["year"], state["semester"], state["sub_idx"], state["subject"], state["edu_type"]
         search_pattern = f"%{keyword}%"
 
         conn = get_db()
@@ -1184,14 +1258,14 @@ def register_student_handlers(bot):
             cur = conn.cursor()
             cur.execute("""
                 SELECT id FROM questions 
-                WHERE year=%s AND semester=%s AND subject=%s 
+                WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s
                 AND (
                     question_text ILIKE %s OR 
                     option_a ILIKE %s OR option_b ILIKE %s OR option_c ILIKE %s OR option_d ILIKE %s OR 
                     COALESCE(explanation, '') ILIKE %s
                 )
                 ORDER BY id ASC
-            """, (year_num, sem_num, subject_name, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
+            """, (year_num, sem_num, subject_name, edu_type, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern))
             q_ids = [r[0] for r in cur.fetchall()]
             cur.close()
         except Exception:
@@ -1219,6 +1293,7 @@ def register_student_handlers(bot):
         )
         from handlers.exam_handler import send_current_question
         send_current_question(bot, message.chat.id, user_id, load_session_from_db(user_id))
+
 
     # ==================== قسم المكتبة (PDF) ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pdfy_"))
