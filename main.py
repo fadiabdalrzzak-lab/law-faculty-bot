@@ -21,7 +21,7 @@ try:
     from handlers.admin_handler import register_admin_handlers
 except ImportError:
     pass
-from scheduler import start_scheduler
+from handlers.scheduler import start_scheduler
 # تسجيل أوامر البوت
 register_student_handlers(bot)
 register_exam_handlers(bot)
