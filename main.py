@@ -21,7 +21,7 @@ try:
     from handlers.admin_handler import register_admin_handlers
 except ImportError:
     pass
-
+from scheduler import start_scheduler
 # تسجيل أوامر البوت
 register_student_handlers(bot)
 register_exam_handlers(bot)
@@ -77,7 +77,7 @@ def send_daily_challenges():
         print(f"❌ خطأ في إرسال التحديات: {e}")
     finally: 
         release_db(conn)
-
+start_scheduler(bot)
 # نقطة الإطلاق التلقائية وإدارة اتصال تيليجرام
 def start_bot_and_db():
     try:
