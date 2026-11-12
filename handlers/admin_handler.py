@@ -60,6 +60,91 @@ def show_mng_questions_page(bot, chat_id, edu_type, year_num, sem_num, sub_idx, 
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
 def register_admin_handlers(bot):
+        @bot.message_handler(commands=['del_cards'])
+    def handle_del_cards_command(message):
+        if not is_admin(message.from_user.id): return
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🏛️ التعليم النظامي", callback_data="dfce_regular"),
+            types.InlineKeyboardButton("📖 التعليم المفتوح", callback_data="dfce_open")
+        )
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.send_message(message.chat.id, "🗑️ **حذف بطاقات مادة كاملة:**\nاختر النظام:", reply_markup=markup, parse_mode="Markdown")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dfce_"))
+    def dfce_step(call):
+        edu_type = call.data.split("_")[1]
+        markup = types.InlineKeyboardMarkup()
+        for y in YEARS: markup.add(types.InlineKeyboardButton(YEARS[y], callback_data=f"dfcy_{edu_type}_{y}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text("اختر السنة:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dfcy_"))
+    def dfcy_step(call):
+        _, edu_type, year = call.data.split("_")
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT semester FROM flashcards WHERE year=%s AND education_type=%s ORDER BY semester", (int(year), edu_type))
+            semesters = [r[0] for r in cur.fetchall()]
+            cur.close()
+        finally: release_db(conn)
+        
+        markup = types.InlineKeyboardMarkup()
+        for s in semesters: markup.add(types.InlineKeyboardButton(SEMESTERS[s], callback_data=f"dfcs_{edu_type}_{year}_{s}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text("اختر الفصل:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dfcs_"))
+    def dfcs_step(call):
+        _, edu_type, year, sem = call.data.split("_")
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject, COUNT(id) FROM flashcards WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject", (int(year), int(sem), edu_type))
+            subjects = cur.fetchall()
+            cur.close()
+        finally: release_db(conn)
+        
+        if not subjects:
+            return safe_answer_callback(bot, call.id, "لا توجد بطاقات مسجلة في هذا الفصل.", show_alert=True)
+            
+        markup = types.InlineKeyboardMarkup()
+        for idx, (sub, cnt) in enumerate(subjects): 
+            markup.add(types.InlineKeyboardButton(f"🗑️ {sub} ({cnt} بطاقة)", callback_data=f"dfcdo_{edu_type}_{year}_{sem}_{idx}"))
+        markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+        bot.edit_message_text("⚠️ اختر المادة التي تريد **حذف جميع بطاقاتها نهائياً**:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+        safe_answer_callback(bot, call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dfcdo_"))
+    def dfcdo_step(call):
+        if not is_admin(call.from_user.id): return
+        _, edu_type, year, sem, sub_idx = call.data.split("_")
+        year, sem, sub_idx = int(year), int(sem), int(sub_idx)
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject FROM flashcards WHERE year=%s AND semester=%s AND education_type=%s GROUP BY subject ORDER BY subject", (year, sem, edu_type))
+            subjects = cur.fetchall()
+            if sub_idx >= len(subjects):
+                return safe_answer_callback(bot, call.id, "خطأ في التحديد.", show_alert=True)
+            sub = subjects[sub_idx][0]
+            
+            # نحذف البطاقات من مفضلة الطلاب أولاً حتى لا يتبقى بيانات تالفة
+            cur.execute("DELETE FROM saved_flashcards WHERE flashcard_id IN (SELECT id FROM flashcards WHERE subject=%s AND education_type=%s AND year=%s AND semester=%s)", (sub, edu_type, year, sem))
+            # ثم نحذف البطاقات نفسها
+            cur.execute("DELETE FROM flashcards WHERE subject=%s AND education_type=%s AND year=%s AND semester=%s", (sub, edu_type, year, sem))
+            count = cur.rowcount
+            conn.commit()
+            cur.close()
+        finally: release_db(conn)
+        
+        safe_answer_callback(bot, call.id, "✅ تم الحذف بنجاح!", show_alert=True)
+        bot.edit_message_text(f"🗑️ تم حذف **{count}** بطاقة تعليمية من مادة **{md(sub)}** بنجاح.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
+
     @bot.message_handler(commands=['admin'])
     def show_admin_panel(message):
         if is_admin(message.from_user.id):
