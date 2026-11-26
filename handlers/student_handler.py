@@ -1322,6 +1322,56 @@ def register_student_handlers(bot):
         else: 
             safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
 
+        @bot.callback_query_handler(func=lambda call: call.data.startswith("delpdf_"))
+    def handle_delete_pdf(call):
+        if not is_admin(call.from_user.id):
+            return safe_answer_callback(bot, call.id, "⚠️ مخصص للمشرف فقط.", show_alert=True)
+        
+        parts = call.data.split("_")
+        pdf_id, year_num, sem_num, sub_idx = map(int, parts[1:5])
+        edu_type = get_user_edu_type(call.from_user.id)
+        
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT subject FROM pdf_files WHERE id=%s", (pdf_id,))
+            row = cur.fetchone()
+            subject_name = row[0] if row else ""
+            
+            cur.execute("DELETE FROM saved_pdfs WHERE pdf_id=%s", (pdf_id,))
+            cur.execute("DELETE FROM pdf_files WHERE id=%s", (pdf_id,))
+            conn.commit()
+            
+            pdfs = []
+            if subject_name:
+                cur.execute("SELECT id, title FROM pdf_files WHERE year=%s AND semester=%s AND subject=%s AND education_type=%s ORDER BY id DESC", (year_num, sem_num, subject_name, edu_type))
+                pdfs = cur.fetchall()
+            cur.close()
+        except Exception:
+            conn.rollback()
+            return safe_answer_callback(bot, call.id, "❌ خطأ أثناء الحذف.", show_alert=True)
+        finally:
+            release_db(conn)
+            
+        safe_answer_callback(bot, call.id, "✅ تم حذف الملف بنجاح!", show_alert=True)
+        
+        if not pdfs:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🏠 إغلاق", callback_data="delete_this_message"))
+            bot.edit_message_text("🗑️ تم حذف الملف، ولا توجد ملفات أخرى في هذه المادة.", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+            return
+            
+        markup = types.InlineKeyboardMarkup()
+        for p_id, title in pdfs:
+            row = [
+                types.InlineKeyboardButton(f"📄 {title}", callback_data=f"getpdf_{p_id}"),
+                types.InlineKeyboardButton("🔖 حفظ", callback_data=f"savepdf_{p_id}"),
+                types.InlineKeyboardButton("🗑️", callback_data=f"delpdf_{p_id}_{year_num}_{sem_num}_{sub_idx}")
+            ]
+            markup.row(*row)
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"pdfs_{year_num}_{sem_num}"))
+        bot.edit_message_text(f"📄 **{subject_name}:**", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
     # ==================== قسم المحفوظات ====================
     @bot.callback_query_handler(func=lambda call: call.data == "show_saved")
     def handle_saved_menu(call):
