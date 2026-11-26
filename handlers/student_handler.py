@@ -1321,8 +1321,8 @@ def register_student_handlers(bot):
                 bot.send_message(call.message.chat.id, "❌ عذراً، يبدو أن هذا الملف معطوب أو تم حذفه من سيرفر تيليجرام. يرجى إبلاغ المشرف.")
         else: 
             safe_answer_callback(bot, call.id, "❌ غير موجود.", show_alert=True)
-
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("delpdf_"))
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("delpdf_"))
     def handle_delete_pdf(call):
         if not is_admin(call.from_user.id):
             return safe_answer_callback(bot, call.id, "⚠️ مخصص للمشرف فقط.", show_alert=True)
