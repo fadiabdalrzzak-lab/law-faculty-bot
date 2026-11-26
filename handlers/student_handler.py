@@ -1478,7 +1478,7 @@ def register_student_handlers(bot):
         finally: release_db(conn)
         safe_answer_callback(bot, call.id, "🗑️ تمت الإزالة.")
         call.data = "saved_pdfs"
-        handle_saved_pdfs(call)
+        handle_saved_pdfs(call) 
 
     # ==================== البطاقات التعليمية التفاعلية ====================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("fcy_"))
